@@ -7,9 +7,16 @@ per-page metrics with full, untruncated event lists. These files feed the
 [ParseBench 2 Explorer](https://github.com/hashiromer/parsebench2-explorer).
 
 Nothing is re-inferred. The scorer runs at a pinned ParseBench commit against pinned ground truth, using ParseBench's own
-evaluator (`parse-bench evaluation run --next … --next_only`, as its `scripts/leaderboard/rescore.py` does). The
-only change is [`full_events.patch`](full_events.patch), which removes the caps and truncation on the event examples
-that each metric reports. Scores are unaffected.
+evaluator (`parse-bench evaluation run --next … --next_only`, as its `scripts/leaderboard/rescore.py` does). Two
+patches are applied, and neither touches the scoring code:
+
+- [`full_events.patch`](full_events.patch) removes the caps and truncation on the event examples each metric
+  reports. Scores are unaffected.
+- [`register_pipelines.patch`](register_pipelines.patch) is ParseBench's own registration of the pipelines
+  published after the scorer commit (`parse.py` from `7d8e0f6`, identical at `2da904b`, the commit upstream verified
+  them with). The layout evaluator picks its adapter from the pipeline registry. Without the registration an unknown
+  pipeline falls back to a heuristic adapter: GPT-6.2 sol (medium) then scored 53.97 on Layout instead of the
+  leaderboard's 53.92.
 
 ## Running
 

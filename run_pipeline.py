@@ -60,6 +60,7 @@ def main() -> int:
     ap.add_argument("--scorer-commit", required=True)
     ap.add_argument("--data-revision", required=True)
     ap.add_argument("--patch-sha256", required=True)
+    ap.add_argument("--register-patch-sha256", required=True)
     a = ap.parse_args()
     gt_dir, work, out = a.gt_dir.resolve(), a.work.resolve(), a.out.resolve()
     out.mkdir(parents=True, exist_ok=True)
@@ -140,6 +141,7 @@ def main() -> int:
         "dimensions": {k: v.get("score") for k, v in score.get("dimensions", {}).items()},
         "parsebench_commit": a.scorer_commit, "ground_truth_repo": DATA_REPO,
         "ground_truth_revision": a.data_revision, "patch_sha256": a.patch_sha256,
+        "register_patch_sha256": a.register_patch_sha256,
     }
     (out / f"{a.pipeline}.manifest.json").write_text(json.dumps(entry, indent=2))
     print(json.dumps({k: entry[k] for k in ("pipeline", "pages", "next_score", "dimensions")}, indent=2))

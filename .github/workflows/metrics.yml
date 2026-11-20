@@ -104,10 +104,16 @@ jobs:
           ref: ${{ inputs.scorer_commit }}
           path: scorer
 
-      - name: Apply full_events.patch
+      # full_events.patch: uncapped event lists (scores unchanged).
+      # register_pipelines.patch: ParseBench's own registration of pipelines published after the scorer
+      # commit (7d8e0f6, parse.py only). The layout evaluator picks its adapter from this registry, so an
+      # unregistered pipeline falls back to a heuristic adapter and can score differently. Scoring code is untouched.
+      - name: Apply patches
         run: |
-          echo "patch sha256: $(sha256sum full_events.patch | cut -d' ' -f1)"
-          git -C scorer apply "$GITHUB_WORKSPACE/full_events.patch"
+          for p in full_events.patch register_pipelines.patch; do
+            echo "$p sha256: $(sha256sum $p | cut -d' ' -f1)"
+            git -C scorer apply "$GITHUB_WORKSPACE/$p"
+          done
           git -C scorer diff --stat
 
       - uses: astral-sh/setup-uv@v5
@@ -137,7 +143,8 @@ jobs:
             --provider "$PROVIDER" --pipeline "$PIPELINE" --results-revision "$RESULTS_REV" \
             --gt-dir gt --work work --out deliver \
             --scorer-commit "$SCORER_COMMIT" --data-revision "$DATA_REV" \
-            --patch-sha256 "$(sha256sum full_events.patch | cut -d' ' -f1)"
+            --patch-sha256 "$(sha256sum full_events.patch | cut -d' ' -f1)" \
+            --register-patch-sha256 "$(sha256sum register_pipelines.patch | cut -d' ' -f1)"
 
       - uses: actions/upload-artifact@v4
         with:
