@@ -114,8 +114,10 @@ jobs:
         with:
           python-version: "3.12"
 
+      # Layout adapters import provider SDKs (llama_cloud and others), so the evaluator needs the
+      # runners extra, as in ParseBench's own leaderboard workflows.
       - name: Install scorer
-        run: uv sync --project scorer --frozen
+        run: uv sync --project scorer --frozen --extra runners --extra fast
 
       - uses: actions/cache/restore@v4
         with:
@@ -131,7 +133,7 @@ jobs:
           SCORER_COMMIT: ${{ inputs.scorer_commit }}
           DATA_REV: ${{ inputs.data_revision }}
         run: |
-          uv run --project scorer --frozen python run_pipeline.py \
+          uv run --project scorer --no-sync python run_pipeline.py \
             --provider "$PROVIDER" --pipeline "$PIPELINE" --results-revision "$RESULTS_REV" \
             --gt-dir gt --work work --out deliver \
             --scorer-commit "$SCORER_COMMIT" --data-revision "$DATA_REV" \

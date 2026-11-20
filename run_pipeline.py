@@ -96,6 +96,19 @@ def main() -> int:
     subprocess.run(cmd, check=True)
     score = json.loads((report_dir / "_next_score.json").read_text())
 
+    # A harness failure (e.g. a missing optional SDK) is recorded per page and scores it 0. None of the first
+    # delivery's 56 pipelines has one, so any here means the environment is wrong: fail instead of exporting.
+    harness_errors = {}
+    for subset in SUBSETS:
+        rep = json.loads((output_root / subset / a.pipeline / "_evaluation_report.json").read_text())
+        for r in rep.get("per_example_results", []):
+            if str(r.get("error") or "").startswith("Evaluation error"):
+                harness_errors.setdefault(str(r["error"])[:200], []).append(r["test_id"])
+    if harness_errors:
+        for err, ids in harness_errors.items():
+            print(f"::error::{len(ids)} page(s): {err} (first: {ids[0]})", flush=True)
+        raise SystemExit("evaluator errors; nothing exported")
+
     deliver = out / f"{a.pipeline}.jsonl.gz"
     pages = events = 0
     with gzip.open(deliver, "wt", encoding="utf-8") as gz:
