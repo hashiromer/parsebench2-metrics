@@ -1,0 +1,10 @@
+[
+  {"provider": "Gemini 4 neon (low)", "pipeline": "gemini_4_neon_thinking_low_parse_with_layout_file",
+   "results_revision": "0b99bfdb8cbb2012c8a201678987fb74285ed446"},
+  {"provider": "GPT-6.2 sol (low)", "pipeline": "openai_gpt_6_2_sol_reasoning_low_parse_with_layout_file",
+   "results_revision": "bd15837631e5f28642a83615fe382e27699f1701"},
+  {"provider": "GPT-6.2 sol (medium)", "pipeline": "openai_gpt_6_2_sol_reasoning_med_parse_with_layout_file",
+   "results_revision": "75320d70d67cbc778bdd9b5dd497729b0e4f729d"},
+  {"provider": "Qwen3.5-4B", "pipeline": "qwen3_5_4b_vllm_layout",
+   "results_revision": "21ecc920c6969f69353d4be51d27a4346979f645"}
+]

@@ -1,0 +1,116 @@
+diff --git a/src/parse_bench/evaluation/metrics/parse/chart_next.py b/src/parse_bench/evaluation/metrics/parse/chart_next.py
+index 9382ae3..ad41495 100644
+--- a/src/parse_bench/evaluation/metrics/parse/chart_next.py
++++ b/src/parse_bench/evaluation/metrics/parse/chart_next.py
+@@ -897,7 +897,7 @@ class ChartNextResult:
+     points: list[dict[str, Any]] = field(default_factory=list)
+     policy_groups: list[dict[str, Any]] | None = None
+ 
+-    def metadata(self, max_examples: int = 20) -> dict[str, Any]:
++    def metadata(self, max_examples: int = 10**9) -> dict[str, Any]:
+         return {
+             "policy_inputs": self.policy_groups
+             if self.policy_groups is not None
+@@ -926,7 +926,7 @@ class ChartNextResult:
+             "events": {"critical": self.events.critical, "major": self.events.major, "minor": self.events.minor},
+             "event_kinds": self.events.kinds(),
+             "event_examples": [
+-                {"kind": k, "reference": r[:160], "output": h[:160]} for k, r, h in self.events.examples[:max_examples]
++                {"kind": k, "reference": r, "output": h} for k, r, h in self.events.examples[:max_examples]
+             ],
+         }
+ 
+diff --git a/src/parse_bench/evaluation/metrics/parse/formatting_v2.py b/src/parse_bench/evaluation/metrics/parse/formatting_v2.py
+index 14c00b4..76ab67c 100644
+--- a/src/parse_bench/evaluation/metrics/parse/formatting_v2.py
++++ b/src/parse_bench/evaluation/metrics/parse/formatting_v2.py
+@@ -827,7 +827,7 @@ class FormattingResult:
+                 c[e.cls] += 1
+         return c
+ 
+-    def metadata(self, max_examples: int = 25) -> dict[str, Any]:
++    def metadata(self, max_examples: int = 10**9) -> dict[str, Any]:
+         from parse_bench.evaluation.metric_policy import atom_inputs
+ 
+         kinds: dict[str, int] = {}
+@@ -848,8 +848,8 @@ class FormattingResult:
+                 {
+                     "kind": e.kind,
+                     "severity": e.cls,
+-                    "reference": e.ref[:160],
+-                    "output": e.out[:160],
++                    "reference": e.ref,
++                    "output": e.out,
+                     "charged": e.charged,
+                 }
+                 for e in self.events[:max_examples]
+diff --git a/src/parse_bench/evaluation/metrics/parse/forms_v2.py b/src/parse_bench/evaluation/metrics/parse/forms_v2.py
+index 77d616c..86a48f8 100644
+--- a/src/parse_bench/evaluation/metrics/parse/forms_v2.py
++++ b/src/parse_bench/evaluation/metrics/parse/forms_v2.py
+@@ -3930,7 +3930,7 @@ class FormsResult:
+                 c[e.cls] += 1
+         return c
+ 
+-    def metadata(self, max_examples: int = 25) -> dict[str, Any]:
++    def metadata(self, max_examples: int = 10**9) -> dict[str, Any]:
+         from parse_bench.evaluation.metric_policy import atom_inputs
+ 
+         kinds: dict[str, int] = {}
+@@ -3952,9 +3952,9 @@ class FormsResult:
+                 {
+                     "kind": e.kind,
+                     "severity": e.cls,
+-                    "field": e.label[:120],
+-                    "expected": e.expected[:120],
+-                    "output": e.got[:160],
++                    "field": e.label,
++                    "expected": e.expected,
++                    "output": e.got,
+                     "charged": e.charged,
+                 }
+                 for e in ordered[:max_examples]
+diff --git a/src/parse_bench/evaluation/metrics/parse/table_next.py b/src/parse_bench/evaluation/metrics/parse/table_next.py
+index 96f8f9c..a81eae8 100644
+--- a/src/parse_bench/evaluation/metrics/parse/table_next.py
++++ b/src/parse_bench/evaluation/metrics/parse/table_next.py
+@@ -1626,7 +1626,7 @@ class TableNextResult:
+     tables_output: int
+     events: TableNextEvents
+ 
+-    def metadata(self, examples: int = 12) -> dict[str, Any]:
++    def metadata(self, examples: int = 10**9) -> dict[str, Any]:
+         from parse_bench.evaluation.metric_policy import table_inputs
+ 
+         types: dict[str, int] = {}
+@@ -1634,7 +1634,7 @@ class TableNextResult:
+             if sev != "detail":
+                 types[kind] = types.get(kind, 0) + 1
+         shown = [
+-            {"type": k, "severity": s, "expected": a[:160], "output": b[:160]}
++            {"type": k, "severity": s, "expected": a, "output": b}
+             for k, a, b, s in self.events.items
+             if s in ("critical", "major", "minor")
+         ][:examples]
+diff --git a/src/parse_bench/evaluation/metrics/parse/text_next.py b/src/parse_bench/evaluation/metrics/parse/text_next.py
+index 59f438c..c7c27be 100644
+--- a/src/parse_bench/evaluation/metrics/parse/text_next.py
++++ b/src/parse_bench/evaluation/metrics/parse/text_next.py
+@@ -1227,7 +1227,7 @@ class TextNextResult:
+     n_hyp: int
+     events: TextNextEvents
+ 
+-    def metadata(self, max_examples: int = 20) -> dict[str, Any]:
++    def metadata(self, max_examples: int = 10**9) -> dict[str, Any]:
+         return {
+             "proportional": self.proportional,
+             "floor": self.floor,
+@@ -1252,7 +1252,7 @@ class TextNextResult:
+             "event_kinds": self.events.kinds(),
+             "uncharged_repeats": self.events.uncharged,
+             "event_examples": [
+-                {"kind": k, "reference": r[:160], "output": h[:160]} for k, r, h in self.events.examples[:max_examples]
++                {"kind": k, "reference": r, "output": h} for k, r, h in self.events.examples[:max_examples]
+             ],
+         }
+ 

@@ -1,0 +1,144 @@
+name: Build metrics
+
+# Manual only: there is deliberately no push, pull_request or schedule trigger.
+# Re-scores ParseBench 2 pipelines from their published outputs with a pinned ParseBench
+# commit (plus full_events.patch) against pinned ground truth, one job per pipeline, and
+# uploads <pipeline>.jsonl.gz / .next_score.json / .manifest.json as artifacts.
+
+on:
+  workflow_dispatch:
+    inputs:
+      pipelines:
+        description: Comma-separated pipeline names from pipelines.json (empty = all)
+        type: string
+        default: ""
+      scorer_commit:
+        description: run-llama/ParseBench commit to score with
+        type: string
+        default: d7efdbc864e2e55f9793063a90936123fc769004
+      data_revision:
+        description: llamaindex/ParseBench-2 (ground truth) commit
+        type: string
+        default: 2d9a2344660647e87dc272458ea1978428f895eb
+
+permissions:
+  contents: read
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select pipelines
+        id: matrix
+        env:
+          ONLY: ${{ inputs.pipelines }}
+        run: |
+          python3 - >> "$GITHUB_OUTPUT" <<'EOF'
+          import json, os
+          rows = json.load(open("pipelines.json"))
+          only = [p.strip() for p in os.environ["ONLY"].split(",") if p.strip()]
+          unknown = sorted(set(only) - {r["pipeline"] for r in rows})
+          if unknown:
+              raise SystemExit(f"not in pipelines.json: {unknown}")
+          if only:
+              rows = [r for r in rows if r["pipeline"] in only]
+          print("matrix=" + json.dumps({"include": rows}))
+          EOF
+
+      # Fetch the ground truth once and share it through the cache, so the matrix jobs
+      # do not all hit the Hub with ~9,000 file downloads at the same time.
+      - id: gt-cache
+        uses: actions/cache@v4
+        with:
+          path: gt
+          key: parsebench2-gt-${{ inputs.data_revision }}
+          lookup-only: true
+
+      - if: steps.gt-cache.outputs.cache-hit != 'true'
+        name: Download ground truth
+        env:
+          DATA_REV: ${{ inputs.data_revision }}
+        run: |
+          pip install --quiet "huggingface_hub>=0.34"
+          python3 - <<'EOF'
+          import os, time
+          from huggingface_hub import snapshot_download
+          for i in range(6):
+              try:
+                  snapshot_download("llamaindex/ParseBench-2", repo_type="dataset",
+                                    revision=os.environ["DATA_REV"], local_dir="gt", max_workers=4)
+                  break
+              except Exception as e:
+                  if i == 5:
+                      raise
+                  print("retry", i, repr(e)[:200], flush=True)
+                  time.sleep(15 * 2 ** i)
+          EOF
+          rm -rf gt/.cache
+
+      - if: steps.gt-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: gt
+          key: parsebench2-gt-${{ inputs.data_revision }}
+
+  score:
+    needs: prepare
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      max-parallel: 8
+      matrix: ${{ fromJson(needs.prepare.outputs.matrix) }}
+    name: score ${{ matrix.pipeline }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/checkout@v4
+        with:
+          repository: run-llama/ParseBench
+          ref: ${{ inputs.scorer_commit }}
+          path: scorer
+
+      - name: Apply full_events.patch
+        run: |
+          echo "patch sha256: $(sha256sum full_events.patch | cut -d' ' -f1)"
+          git -C scorer apply "$GITHUB_WORKSPACE/full_events.patch"
+          git -C scorer diff --stat
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install scorer
+        run: uv sync --project scorer --frozen
+
+      - uses: actions/cache/restore@v4
+        with:
+          path: gt
+          key: parsebench2-gt-${{ inputs.data_revision }}
+          fail-on-cache-miss: true
+
+      - name: Score
+        env:
+          PROVIDER: ${{ matrix.provider }}
+          PIPELINE: ${{ matrix.pipeline }}
+          RESULTS_REV: ${{ matrix.results_revision }}
+          SCORER_COMMIT: ${{ inputs.scorer_commit }}
+          DATA_REV: ${{ inputs.data_revision }}
+        run: |
+          uv run --project scorer --frozen python run_pipeline.py \
+            --provider "$PROVIDER" --pipeline "$PIPELINE" --results-revision "$RESULTS_REV" \
+            --gt-dir gt --work work --out deliver \
+            --scorer-commit "$SCORER_COMMIT" --data-revision "$DATA_REV" \
+            --patch-sha256 "$(sha256sum full_events.patch | cut -d' ' -f1)"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: metrics-${{ matrix.pipeline }}
+          path: deliver/
+          retention-days: 30
