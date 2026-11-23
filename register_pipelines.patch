@@ -1,8 +1,30 @@
 diff --git a/src/parse_bench/inference/pipelines/parse.py b/src/parse_bench/inference/pipelines/parse.py
-index f4d6396..f77c2cb 100644
+index f4d6396..298b267 100644
 --- a/src/parse_bench/inference/pipelines/parse.py
 +++ b/src/parse_bench/inference/pipelines/parse.py
-@@ -2166,6 +2166,21 @@ def register_parse_pipelines(register_fn) -> None:  # type: ignore[no-untyped-de
+@@ -515,6 +515,21 @@ def register_parse_pipelines(register_fn) -> None:  # type: ignore[no-untyped-de
+         )
+     )
+ 
++    # LiteParse + OCRia-nano-1 (ParseBench 2 leaderboard; registered upstream in #317, 969ace0)
++    register_fn(
++        PipelineSpec(
++            pipeline_name="liteparse_ocria_nano",
++            provider_name="liteparse",
++            product_type=ProductType.PARSE,
++            config={
++                "output_format": "markdown",
++                "ocr_enabled": True,
++                "ocr_backend": "ocria-nano",
++                "keep_headers_footers": True,
++            },
++        )
++    )
++
+     register_fn(
+         PipelineSpec(
+             pipeline_name="liteparse_text",
+@@ -2166,6 +2181,21 @@ def register_parse_pipelines(register_fn) -> None:  # type: ignore[no-untyped-de
          )
      )
  
@@ -24,7 +46,7 @@ index f4d6396..f77c2cb 100644
      # Gemini - Parse with Layout File - thinking-level sweep. Adds levels for models
      # whose other layout-file pipelines are registered above; each config matches that
      # model's sibling except for thinking_level.
-@@ -2493,6 +2508,22 @@ def register_parse_pipelines(register_fn) -> None:  # type: ignore[no-untyped-de
+@@ -2493,6 +2523,22 @@ def register_parse_pipelines(register_fn) -> None:  # type: ignore[no-untyped-de
              )
          )
  

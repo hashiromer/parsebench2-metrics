@@ -14,7 +14,7 @@ patches are applied, and neither touches the scoring code:
   reports. Scores are unaffected.
 - [`register_pipelines.patch`](register_pipelines.patch) is ParseBench's own registration of the pipelines
   published after the scorer commit (`parse.py` from `7d8e0f6`, identical at `2da904b`, the commit upstream verified
-  them with). The layout evaluator picks its adapter from the pipeline registry. Without the registration an unknown
+  them with; `liteparse_ocria_nano` from `969ace0`, PR #317). The layout evaluator picks its adapter from the pipeline registry. Without the registration an unknown
   pipeline falls back to a heuristic adapter: GPT-6.2 sol (medium) then scored 53.97 on Layout instead of the
   leaderboard's 53.92.
 
