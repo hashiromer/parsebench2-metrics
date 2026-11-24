@@ -7,6 +7,8 @@
    "results_revision": "75320d70d67cbc778bdd9b5dd497729b0e4f729d"},
   {"provider": "LiteParse + OCRia-nano-1", "pipeline": "liteparse_ocria_nano",
    "results_revision": "e7cd5e1b785f617409416af564ceafeb2f43776d"},
+  {"provider": "OCRia-1", "pipeline": "ocria_1",
+   "results_revision": "497e243f68cd861c80b5a1405e20758992d4a8de"},
   {"provider": "Qwen3.5-4B", "pipeline": "qwen3_5_4b_vllm_layout",
    "results_revision": "21ecc920c6969f69353d4be51d27a4346979f645"}
 ]

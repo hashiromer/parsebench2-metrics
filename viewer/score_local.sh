@@ -11,16 +11,15 @@ WORK=$(realpath -m "$1"); SCORER_COMMIT=$2; DATA_REV=$3; shift 3
 REPO=$(cd "$(dirname "$0")/.." && pwd)
 mkdir -p "$WORK"
 
-if [ ! -d "$WORK/scorer/.git" ] || [ "$(git -C "$WORK/scorer" rev-parse HEAD)" != "$SCORER_COMMIT" ] \
-   || ! git -C "$WORK/scorer" diff --quiet; then
+if [ ! -d "$WORK/scorer/.git" ] || [ "$(git -C "$WORK/scorer" rev-parse HEAD)" != "$SCORER_COMMIT" ]; then
   rm -rf "$WORK/scorer"
   git clone -q https://github.com/run-llama/ParseBench "$WORK/scorer"
   git -C "$WORK/scorer" checkout -q "$SCORER_COMMIT"
 fi
-# Patches, as in the workflow: full_events.patch (uncapped events) and register_pipelines.patch.
-if git -C "$WORK/scorer" diff --quiet; then
-  for p in full_events.patch register_pipelines.patch; do git -C "$WORK/scorer" apply "$REPO/$p"; done
-fi
+# Patches, as in the workflow: full_events.patch (uncapped events) and register_pipelines.patch. Earlier
+# patches are dropped first (tracked files only; the scorer's .venv stays), so an updated patch is applied.
+git -C "$WORK/scorer" checkout -q -- .
+for p in full_events.patch register_pipelines.patch; do git -C "$WORK/scorer" apply "$REPO/$p"; done
 uv sync -q --project "$WORK/scorer" --frozen --extra runners --extra fast
 
 if [ ! -f "$WORK/gt/.done-$DATA_REV" ]; then

@@ -66,18 +66,22 @@ For each new pipeline:
 Each new pipeline's six `next_score` values should match `leaderboard-v2.csv` to its 2-decimal rounding. If one
 doesn't, stop: it usually means a missing registration (above) or an upstream scorer change.
 
-### 3. Download the base and the new pipelines' outputs
+### 3. Get the base and the new pipelines' outputs
 
 ```bash
-hf download Hashir621/parsebench2-viewer --repo-type dataset --revision <dataset commit> --local-dir work/base --max-workers 4
+python fetch_base.py <dataset commit> work/<update>/base work/<previous update>/out work/<previous update>/base
 hf download llamaindex/ParseBench-2-results --repo-type dataset --revision <results_revision> \
-    --include "results/<pipeline>/*" --local-dir work/results --max-workers 4
+    --include "results/<pipeline>/*" --local-dir work/<update>/results --max-workers 4
 ```
 
-Do the second command for each new pipeline, and for the control (`--local-dir work/results-ctrl`, at the control's
-`results_revision` from `pipelines.json`).
+`fetch_base.py` hard-links every file that is already on disk with the right content hash and downloads only the
+rest, then checks the whole tree. It skips what the build never reads (source documents, page images, ground truth:
+about 17,000 files), so with the previous update's directories as seeds it usually downloads nothing. Without
+seeds it fetches about 9,300 files (3.5 GB); more than ~6 workers trips HF rate limits (HTTP 429).
 
-The base is about 3.4 GB and 9,000+ files; more than ~6 workers trips HF rate limits (HTTP 429). Re-running resumes.
+Do the second command for each new pipeline, and for the control (`--local-dir work/results-ctrl`, at the control's
+`results_revision` from `pipelines.json`). Check that the newest results revision only *adds* files to the one the
+dataset is pinned at (compare the two trees); it becomes the dataset's results pin.
 
 ### 4. Prove the code still reproduces the base
 
@@ -188,6 +192,7 @@ These rules were reverse-engineered from the published data; the verify scripts 
 | `check_control.py`, `verify_aggregates.py`, `verify_index.py` | step 4: prove the code on existing data |
 | `build.py` | step 5: incremental build (adds pipelines only) |
 | `validate.py`, `finalize.py` | steps 6–7 |
+| `fetch_base.py` | step 3: the dataset at a commit, reusing files on disk |
 | `changeset.py`, `upload.py`, `sync_main.py` | step 8 |
 
 ## History
