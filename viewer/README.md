@@ -142,10 +142,16 @@ equals the branch tip (no history rewrite).
 
 ### 9. Point the explorer at the new commit
 
-In `parsebench2-explorer/src/lib/config.ts`, update `DATA_COMMIT`, the results and leaderboard revisions, and
-`PARSER_COUNT`, plus the count in its README. Push a branch first: Workers Builds gives it a preview at
-`<branch>-parsebench2-explorer.hashir.workers.dev`. Check it, then merge to `main`, which deploys production. Build
-logs: `cf builds list` / `cf builds logs <id>` (the Builds API takes only the `cf` user sign-in, not account tokens).
+In `parsebench2-explorer/src/lib/config.ts`, update `DATA_COMMIT` and `DATA_UPDATED_AT` (that commit's time, UTC
+ISO 8601: the site shows it as "updated 3 minutes ago" in the visitor's time zone), the results and leaderboard
+revisions, and `PARSER_COUNT`, plus the count in its README. New providers may need a rule in `src/lib/brands.ts` for
+their logo. Push a branch first: Workers Builds gives it a preview at `<branch>-parsebench2-explorer.hashir.workers.dev`.
+
+On that preview address the landing page works, but pages that fetch the dataset from the browser fail with a CORS
+error: Hugging Face doesn't allow the `*.workers.dev` origin, for old and new commits alike. So check those pages with
+a local build (`pnpm run build:vinext && npx vite preview`) in a headless browser, then merge to `main`, which deploys
+production, and check production. Build logs: `cf builds list` / `cf builds logs <id>` (the Builds API takes only the
+`cf` user sign-in, not account tokens).
 
 ## When the verdict is NEEDS_REVIEW
 
@@ -200,4 +206,7 @@ These rules were reverse-engineered from the published data; the verify scripts 
 - **2026-11-23**, 59 → 60 parsers: added `liteparse_ocria_nano`. Dataset `8fc443f` on branch `update-59-parsers`,
   then `main` synced at `9a042c2`. Results `e7cd5e1`, leaderboard `c8f7798`. Control GPT-6.2 sol (medium): PASS. All
   checks passed; 9,250 files changed. The single-commit upload answered 504 and had landed.
-- **2026-11-24**: `detect_changes.py` reports a new upstream pipeline, `ocria_1`, not yet added.
+- **2026-11-24**, 60 → 61 parsers: added `ocria_1` (OCRia-1, rank 7) with this runbook. Scored locally
+  (`score_local.sh`, register patch at `03fbc17`); control exact. Base assembled by `fetch_base.py` from the previous
+  update's files (no downloads). Dataset `14a653c` on branch `update-61-parsers` (single commit, 4.5 min, no 504),
+  `main` synced at `b6b3c67`. Results `497e243`, leaderboard `d6209da`. All checks passed; 9,251 files changed.
