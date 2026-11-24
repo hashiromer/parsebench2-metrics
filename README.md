@@ -18,7 +18,13 @@ patches are applied, and neither touches the scoring code:
   pipeline falls back to a heuristic adapter: GPT-6.2 sol (medium) then scored 53.97 on Layout instead of the
   leaderboard's 53.92.
 
+**Updating the viewer dataset?** Start with [`viewer/README.md`](viewer/README.md): it is the runbook for the whole
+update (find what changed upstream, score, build, validate, upload) and holds the build code.
+
 ## Running
+
+To score on your own machine instead of GitHub Actions, use [`viewer/score_local.sh`](viewer/score_local.sh): it runs
+the same steps as the workflow.
 
 The **Build metrics** workflow is manual only (Actions → Build metrics → Run workflow). There is no push or
 schedule trigger. The inputs are:
