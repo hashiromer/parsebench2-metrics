@@ -2,8 +2,9 @@ name: Build metrics
 
 # Manual only: there is deliberately no push, pull_request or schedule trigger.
 # Re-scores ParseBench 2 pipelines from their published outputs with a pinned ParseBench
-# commit (plus full_events.patch) against pinned ground truth, one job per pipeline, and
-# uploads <pipeline>.jsonl.gz / .next_score.json / .manifest.json as artifacts.
+# commit (plus full_events.patch) against pinned ground truth, a few pipelines per job (in parallel on the
+# runner), and uploads <pipeline>.jsonl.gz / .next_score.json / .manifest.json as one artifact per job
+# (metrics-batch-<n>, kept 30 days). The dataset build itself runs on the maintainer's machine.
 
 on:
   workflow_dispatch:
@@ -15,11 +16,15 @@ on:
       scorer_commit:
         description: run-llama/ParseBench commit to score with
         type: string
-        default: d7efdbc864e2e55f9793063a90936123fc769004
+        default: d6209dab930702c63f6dcf23eca02501a948d76b
       data_revision:
         description: llamaindex/ParseBench-2 (ground truth) commit
         type: string
-        default: 2d9a2344660647e87dc272458ea1978428f895eb
+        default: 2e95407575ba1ad6aa90842258482a561fae1b33
+      per_job:
+        description: Pipelines scored side by side on one runner
+        type: number
+        default: 2
 
 permissions:
   contents: read
@@ -36,6 +41,7 @@ jobs:
         id: matrix
         env:
           ONLY: ${{ inputs.pipelines }}
+          PER_JOB: ${{ inputs.per_job }}
         run: |
           python3 - >> "$GITHUB_OUTPUT" <<'EOF'
           import json, os
@@ -46,7 +52,11 @@ jobs:
               raise SystemExit(f"not in pipelines.json: {unknown}")
           if only:
               rows = [r for r in rows if r["pipeline"] in only]
-          print("matrix=" + json.dumps({"include": rows}))
+          k = max(1, int(float(os.environ["PER_JOB"] or 1)))
+          batches = [rows[i:i + k] for i in range(0, len(rows), k)]
+          print("matrix=" + json.dumps({"include": [
+              {"batch": n + 1, "names": ", ".join(r["pipeline"] for r in b), "rows": json.dumps(b)}
+              for n, b in enumerate(batches)]}))
           EOF
 
       # Fetch the ground truth once and share it through the cache, so the matrix jobs
@@ -92,9 +102,9 @@ jobs:
     timeout-minutes: 120
     strategy:
       fail-fast: false
-      max-parallel: 8
+      max-parallel: 20
       matrix: ${{ fromJson(needs.prepare.outputs.matrix) }}
-    name: score ${{ matrix.pipeline }}
+    name: score ${{ matrix.batch }} (${{ matrix.names }})
     steps:
       - uses: actions/checkout@v4
 
@@ -106,13 +116,15 @@ jobs:
 
       # full_events.patch: uncapped event lists (scores unchanged).
       # register_pipelines.patch: ParseBench's own registration of pipelines published after the scorer
-      # commit (7d8e0f6, parse.py only). The layout evaluator picks its adapter from this registry, so an
-      # unregistered pipeline falls back to a heuristic adapter and can score differently. Scoring code is untouched.
+      # commit (parse.py only), emptied once upstream registers them itself. The layout evaluator picks its
+      # adapter from this registry, so an unregistered pipeline falls back to a heuristic adapter and can score
+      # differently. Scoring code is untouched.
       - name: Apply patches
         run: |
           for p in full_events.patch register_pipelines.patch; do
             echo "$p sha256: $(sha256sum $p | cut -d' ' -f1)"
-            git -C scorer apply "$GITHUB_WORKSPACE/$p"
+            # a patch upstream has since covered is emptied (no diff) and skipped
+            if grep -q '^diff --git' "$GITHUB_WORKSPACE/$p"; then git -C scorer apply "$GITHUB_WORKSPACE/$p"; else echo "skipped $p (empty)"; fi
           done
           git -C scorer diff --stat
 
@@ -131,23 +143,34 @@ jobs:
           key: parsebench2-gt-${{ inputs.data_revision }}
           fail-on-cache-miss: true
 
+      # The pipelines of this batch run side by side, each with its own work dir and log.
       - name: Score
         env:
-          PROVIDER: ${{ matrix.provider }}
-          PIPELINE: ${{ matrix.pipeline }}
-          RESULTS_REV: ${{ matrix.results_revision }}
+          ROWS: ${{ matrix.rows }}
           SCORER_COMMIT: ${{ inputs.scorer_commit }}
           DATA_REV: ${{ inputs.data_revision }}
         run: |
-          uv run --project scorer --no-sync python run_pipeline.py \
-            --provider "$PROVIDER" --pipeline "$PIPELINE" --results-revision "$RESULTS_REV" \
-            --gt-dir gt --work work --out deliver \
-            --scorer-commit "$SCORER_COMMIT" --data-revision "$DATA_REV" \
-            --patch-sha256 "$(sha256sum full_events.patch | cut -d' ' -f1)" \
-            --register-patch-sha256 "$(sha256sum register_pipelines.patch | cut -d' ' -f1)"
+          PATCH_SHA=$(sha256sum full_events.patch | cut -d' ' -f1)
+          REG_SHA=$(sha256sum register_pipelines.patch | cut -d' ' -f1)
+          pids=()
+          while IFS=$'\t' read -r provider pipeline rev; do
+            ( uv run --project scorer --no-sync python run_pipeline.py \
+                --provider "$provider" --pipeline "$pipeline" --results-revision "$rev" \
+                --gt-dir gt --work "work/$pipeline" --out deliver \
+                --scorer-commit "$SCORER_COMMIT" --data-revision "$DATA_REV" \
+                --patch-sha256 "$PATCH_SHA" --register-patch-sha256 "$REG_SHA" > "log-$pipeline.txt" 2>&1 ) &
+            pids+=("$!:$pipeline")
+          done < <(python3 -c 'import json, os; [print(r["provider"], r["pipeline"], r["results_revision"], sep="\t") for r in json.loads(os.environ["ROWS"])]')
+          fail=0
+          for x in "${pids[@]}"; do
+            if wait "${x%%:*}"; then echo "== ${x#*:}: ok"; else echo "== ${x#*:}: FAILED"; fail=1; fi
+            echo "::group::log ${x#*:}"; cat "log-${x#*:}.txt"; echo "::endgroup::"
+          done
+          exit $fail
 
-      - uses: actions/upload-artifact@v4
+      - if: always()  # keep a batch partner's results when the other pipeline fails
+        uses: actions/upload-artifact@v4
         with:
-          name: metrics-${{ matrix.pipeline }}
+          name: metrics-batch-${{ matrix.batch }}
           path: deliver/
           retention-days: 30

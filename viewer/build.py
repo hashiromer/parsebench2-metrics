@@ -1,13 +1,21 @@
-"""Add scored pipelines to the ParseBench 2 viewer dataset, incrementally.
+"""Add scored pipelines to the ParseBench 2 viewer dataset, or re-score ones already in it.
 
   python build.py --base <dataset at the previous commit> --out <dir for changed files> \
       --leaderboard leaderboard-v2.csv --results-revision <dataset-level results pin> \
-      --add <pipeline>:<deliverable.jsonl.gz>:<next_score.json>:<results/<pipeline> dir>:<results_revision> [...]
+      [--scorer-revision <commit> --groundtruth-revision <revision>] \
+      --add <pipeline>:<deliverable.jsonl.gz>:<next_score.json>:<results/<pipeline> dir>:<results_revision> [...] \
+      --replace <same fields, for a pipeline already in the base> [...]
 
 Per-pipeline rows come from rows.py (proved on a control pipeline by check_control.py); aggregates and index files
-are rebuilt from the merged rows (proved on the base by verify_aggregates.py and verify_index.py). Values that
-depend on one pipeline only (its scores, slots, timing) are kept byte-for-byte for pipelines already present.
-Only files whose content changes are written to --out.
+are rebuilt from the merged rows (proved on the base by verify_aggregates.py and verify_index.py).
+
+--add: a pipeline new to the dataset. --replace: a pipeline whose scoring changed (a new scorer or ground truth);
+all of its scoring rows (scores, events, layout, slots, page-dimension rows, metrics bundle entries) are dropped
+and rebuilt from its new deliverable. What depends only on its outputs (timing, cost, tokens, bbox frame, outputs
+and layout-box bundle entries) is kept as published, and asserted to be what the outputs give, unless its
+results_revision changed. Pipelines neither added nor replaced keep their per-pipeline values byte-for-byte.
+Replacing a pipeline with the deliverable it was published from must reproduce the base exactly (see the runbook).
+Every file the build owns is written to --out; changeset.py keeps only those whose content changed.
 """
 from __future__ import annotations
 
@@ -53,8 +61,12 @@ def main():
     ap.add_argument("--out", required=True)
     ap.add_argument("--leaderboard", required=True)
     ap.add_argument("--results-revision", required=True)
-    ap.add_argument("--add", action="append", required=True)
+    ap.add_argument("--add", action="append", default=[])
+    ap.add_argument("--replace", action="append", default=[])
+    ap.add_argument("--scorer-revision", help="ParseBench commit the deliverables were scored with (site.json)")
+    ap.add_argument("--groundtruth-revision", help="ParseBench-2 revision they were scored against (site.json)")
     a = ap.parse_args()
+    assert a.add or a.replace, "nothing to add or replace"
     B, O = a.base, a.out
     man = json.load(open(f"{B}/viewer_manifest.json"))
     lb_rows = A.read_leaderboard(a.leaderboard)
@@ -69,20 +81,25 @@ def main():
     prompt_pipes = set(prompts["pipelines"]) if isinstance(prompts["pipelines"], (list, dict)) else set()
 
     # ---- new pipelines: per-pipeline rows -------------------------------------------------------------
-    new = {}
-    for spec in a.add:
+    new = {}  # added and replaced pipelines: rows rebuilt from their deliverables
+    base_set = set(base_pl.pipeline)
+    for spec, replacing in [(x, False) for x in a.add] + [(x, True) for x in a.replace]:
         p, deliv, nsf, rawdir, rev = spec.split(":")
-        assert p not in set(base_pl.pipeline), f"{p} already in the base"
+        assert p not in new, f"{p} given twice"
+        assert (p in base_set) == replacing, f"{p}: {'not in' if replacing else 'already in'} the base"
         lines = R.load_deliverable(deliv)
         raw = R.load_raw(rawdir)
         new[p] = dict(lines=lines, raw=raw, rev=rev, deliv=deliv, next_score=json.load(open(nsf)))
-        print(f"{p}: {len(lines)} pages, {len(raw)} raw records")
+        print(f"{'replace' if replacing else 'add'} {p}: {len(lines)} pages, {len(raw)} raw records")
+    replaced = {p for p in new if p in base_set}
+    # outputs unchanged: what depends on them only is kept as published (and checked against them)
+    same_outputs = {p for p in replaced if base_pl.set_index("pipeline").at[p, "results_revision"] == new[p]["rev"]}
 
-    # provider names: results-v2.yaml maps pipeline -> provider; passed via PROVIDERS env as JSON
-    providers = json.loads(os.environ["PROVIDERS"])
+    # provider names of added pipelines: results-v2.yaml maps pipeline -> provider; passed via PROVIDERS env as JSON
+    providers = json.loads(os.environ.get("PROVIDERS") or "{}")
 
     # ---- scores ---------------------------------------------------------------------------------------
-    parts = [base_scores]
+    parts = [base_scores[~base_scores.pipeline.isin(replaced)]]
     for p, n in new.items():
         parts.append(R.score_rows(p, n["lines"], n["raw"], list(base_scores.columns)))
     scores = pd.concat(parts, ignore_index=True).sort_values(["subset", "test_id", "pipeline"], kind="stable")
@@ -100,6 +117,13 @@ def main():
         el_new += e; pr_new += pr
 
     # ---- pipelines (order = leaderboard rank) ----------------------------------------------------------
+    for p in same_outputs:  # rows from the same outputs: the output-only columns must come out as published
+        b = base_scores[base_scores.pipeline == p].sort_values(["subset", "test_id"]).reset_index(drop=True)
+        g = scores[scores.pipeline == p].sort_values(["subset", "test_id"]).reset_index(drop=True)
+        for c in ["test_id", "has_output", "markdown_sha256", "latency_ms", "started_at", "completed_at"] + list(R.RAW_NUMERIC):
+            if c in b.columns:
+                assert ((b[c].isna() & g[c].isna()) | (b[c].astype(object) == g[c].astype(object))).all(), (p, c)
+
     meta = {}
     for r in base_pl.to_dict("records"):
         meta[r["pipeline"]] = {"provider": r["provider"], "results_revision": r["results_revision"],
@@ -107,7 +131,7 @@ def main():
                                "bbox_frame": None if pd.isna(r["bbox_frame"]) else r["bbox_frame"]}
     for p, n in new.items():
         boxes = [rec["output"].get("layout_pages") for (s, _), rec in n["raw"].items() if s == "layout"]
-        meta[p] = {"provider": providers[p], "results_revision": n["rev"],
+        meta[p] = {"provider": meta[p]["provider"] if p in replaced else providers[p], "results_revision": n["rev"],
                    "metrics_file_sha256": sha256_file(n["deliv"]), "bbox_frame": A.bbox_frame(boxes),
                    "next_score": n["next_score"]}
     all_p = list(meta)
@@ -118,15 +142,24 @@ def main():
     keep = [c for c in base_pl.columns if c.startswith(("score_", "delta_")) or c in (
         "has_cost", "has_tokens", "results_revision", "metrics_file_sha256", "bbox_frame")]
     for r in base_pl.to_dict("records"):  # keep per-pipeline values of existing pipelines byte-for-byte
+        if r["pipeline"] in replaced:
+            if r["pipeline"] in same_outputs:  # output-only values stay as published
+                for c in ("has_cost", "has_tokens", "bbox_frame"):
+                    g, b = gen.at[r["pipeline"], c], r[c]
+                    assert g == b or (pd.isna(g) and pd.isna(b)), (r["pipeline"], c, g, b)
+            continue
         for c in keep:
             g, b = gen.at[r["pipeline"], c], r[c]
             if isinstance(b, float) and c.startswith("score_"):
                 assert abs(g - b) < 1e-9, (r["pipeline"], c, g, b)
             gen.at[r["pipeline"], c] = b
     pl = gen.reset_index()[base_pl.columns]
-    slots_by = {p: ({d: sp[p]["slots"][d]["slots"] for d in A.DIMS} if p in sp else {d: st[(p, d)] for d in A.DIMS})
+    kept = lambda p: p in sp and p not in replaced
+    slots_by = {p: ({d: sp[p]["slots"][d]["slots"] for d in A.DIMS} if kept(p) else {d: st[(p, d)] for d in A.DIMS})
                 for p in ranked}
-    tc_by = {p: (sp[p]["timing_cost"] if p in sp else tcs[p]) for p in ranked}
+    for p in same_outputs:  # timing and cost come from the outputs only: as published, and as recomputed
+        assert sp[p]["timing_cost"] == tcs[p], (p, sp[p]["timing_cost"], tcs[p])
+    tc_by = {p: (sp[p]["timing_cost"] if p in sp and (p not in replaced or p in same_outputs) else tcs[p]) for p in ranked}
     for p in new:
         print(p, "rank", int(pl.set_index("pipeline").at[p, "leaderboard_rank"]),
               {c: round(float(pl.set_index("pipeline").at[p, c]), 4) for c in pl.columns if c.startswith(("score_", "delta_"))})
@@ -137,6 +170,7 @@ def main():
     k = ["dimension", "pipeline", "test_id"]
     own = ["score", "has_output", "slot_weight", "n_pages_in_slot", "page_weight", "points_lost",
            "n_critical", "n_major", "n_minor", "n_events"]
+    bpds = bpds[~bpds.pipeline.isin(replaced)]
     mm = pds.merge(bpds[k + own], on=k, how="left", suffixes=("", "_b"), indicator=True)
     old = mm["_merge"] == "both"
     assert old.sum() == len(bpds), "base rows missing after rebuild"
@@ -155,13 +189,16 @@ def main():
     write_parquet(pl, f"{B}/pipelines.parquet", f"{O}/pipelines.parquet", 1 << 20)
     for m, rs in ev_new.items():
         be = pd.read_parquet(f"{B}/metrics/events/{m}.parquet")
+        be = be[~be.pipeline.isin(replaced)]
         df = pd.concat([be, pd.DataFrame(rs, columns=be.columns)], ignore_index=True)
         df = df.sort_values(["subset", "test_id", "pipeline", "event_index"], kind="stable")
         write_parquet(df, f"{B}/metrics/events/{m}.parquet", f"{O}/metrics/events/{m}.parquet", 100000)
     be = pd.read_parquet(f"{B}/metrics/layout_elements.parquet")
+    be = be[~be.pipeline.isin(replaced)]
     df = pd.concat([be, pd.DataFrame(el_new, columns=be.columns)], ignore_index=True).sort_values(["test_id", "pipeline"], kind="stable")
     write_parquet(df, f"{B}/metrics/layout_elements.parquet", f"{O}/metrics/layout_elements.parquet", 100000)
     bp = pd.read_parquet(f"{B}/metrics/layout_predictions.parquet")
+    bp = bp[~bp.pipeline.isin(replaced)]
     df = pd.concat([bp, pd.DataFrame(pr_new, columns=bp.columns)], ignore_index=True).sort_values(
         ["test_id", "pipeline", "page", "pred_index"], kind="stable")
     write_parquet(df, f"{B}/metrics/layout_predictions.parquet", f"{O}/metrics/layout_predictions.parquet", 1 << 20)
@@ -178,6 +215,10 @@ def main():
     site["pipelines"] = [I.site_pipeline(pl_rec[p], (sp[p]["has_prompt"] if p in sp else p in prompt_pipes),
                                          slots_by[p], tc_by[p]) for p in ranked]
     site["sources"]["results"]["revision"] = a.results_revision
+    if a.scorer_revision:
+        site["sources"]["scorer"]["revision"] = a.scorer_revision
+    if a.groundtruth_revision:
+        site["sources"]["groundtruth"]["revision"] = a.groundtruth_revision
     site["counts"].update(pipelines=len(ranked), score_rows=len(scores), page_dimension_rows=len(pds))
     write_text(f"{O}/index/site.json", I.dumps(site))
 
@@ -192,7 +233,10 @@ def main():
             parsers = dict(b["parsers"])
             for p in new:
                 me, oe, _ = ents[p][(subset, pk)]
-                parsers[p] = me if kind == "metrics" else oe
+                e = me if kind == "metrics" else oe
+                if kind == "outputs" and p in same_outputs:
+                    assert parsers[p] == e, ("outputs entry changed", p, subset, pk)
+                parsers[p] = e
             assert set(parsers) == set(ranked), f
             b["parsers"] = {p: parsers[p] for p in ranked}
             if kind == "outputs":
@@ -205,12 +249,15 @@ def main():
         pk = f.split("/")[-1][:-5]
         parsers = dict(b["parsers"])
         for p in new:
-            parsers[p] = ents[p][("layout", pk)][2]
+            e = ents[p][("layout", pk)][2]
+            if p in same_outputs:
+                assert parsers[p] == e, ("layout boxes changed", p, pk)
+            parsers[p] = e
         b["parsers"] = {p: parsers[p] for p in ranked}
         b["source_revision"] = a.results_revision
         write_text(f"{O}/bundles/layout_boxes/layout/{pk}.json", I.dumps(b))
 
-    json.dump({"ranked": ranked, "new": list(new), "meta": {p: {k: v for k, v in meta[p].items() if k != "next_score"}
+    json.dump({"ranked": ranked, "new": [p for p in new if p not in replaced], "replaced": sorted(replaced), "meta": {p: {k: v for k, v in meta[p].items() if k != "next_score"}
                                                              for p in ranked}},
               open(f"{O}/../build_state.json", "w"), indent=1)
     print("written to", O)

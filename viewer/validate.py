@@ -1,4 +1,10 @@
-"""Checks on the merged dataset (base + changed files in --out) before upload. Writes checks.json next to --out."""
+"""Checks on the merged dataset (base + changed files in --out) before upload. Writes checks.json next to --out.
+
+  python validate.py <base> <out> <leaderboard-v2.csv> <pipeline>[,<pipeline>...]
+
+List every pipeline the build added or replaced (--add and --replace). They get the full checks on their new rows;
+every other pipeline must be unchanged.
+"""
 import glob
 import hashlib
 import json
@@ -8,7 +14,9 @@ import sys
 import pandas as pd
 
 BASE, OUT, LB = sys.argv[1], sys.argv[2], sys.argv[3]
-NEW = sys.argv[4].split(",")
+NEW = sys.argv[4].split(",")  # added or replaced
+_base_pipes = set(pd.read_parquet(f"{BASE}/pipelines.parquet").pipeline)
+ADDED = {p for p in NEW if p not in _base_pipes}
 res = {}
 
 
@@ -49,7 +57,7 @@ res["14_leaderboard"] = {"pass": not off and len(pl) == len(lb), "leaderboard_ro
 # existing pipelines unchanged (per-pipeline tables, bit for bit)
 def same_rows(path, keys, where=lambda d: ~d.pipeline.isin(NEW)):
     a = pd.read_parquet(f"{BASE}/{path}"); b = pd.read_parquet(P(path))
-    b = b[where(b)]
+    a, b = a[where(a)], b[where(b)]
     a = a.sort_values(keys).reset_index(drop=True); b = b.sort_values(keys).reset_index(drop=True)
     if a.shape != b.shape:
         return False, f"shape {a.shape} vs {b.shape}"
@@ -65,12 +73,14 @@ for path, keys in [("metrics/scores.parquet", ["pipeline", "test_id"]),
                    for m in ["text_next", "formatting_v2", "table_next", "chart_next", "forms_v2"]]:
     unchanged[path] = same_rows(path, keys)
 a = pd.read_parquet(f"{BASE}/pipelines.parquet").set_index("pipeline")
+a = a[~a.index.isin(NEW)]
 b = pl.set_index("pipeline").loc[a.index]
 diffcols = [c for c in a.columns if not ((a[c].isna() & b[c].isna()) | (a[c].astype(object) == b[c].astype(object))).all()]
 unchanged["pipelines.parquet (columns that changed)"] = (set(diffcols) <= {"leaderboard_rank"}, diffcols)
 rank_moves = {p: (int(a.at[p, "leaderboard_rank"]), int(b.at[p, "leaderboard_rank"]))
               for p in a.index if a.at[p, "leaderboard_rank"] != b.at[p, "leaderboard_rank"]}
 pa_, pb_ = pd.read_parquet(f"{BASE}/metrics/page_dimension_scores.parquet"), pd.read_parquet(P("metrics/page_dimension_scores.parquet"))
+pa_, pb_ = pa_[~pa_.pipeline.isin(NEW)], pb_[~pb_.pipeline.isin(NEW)]
 k = ["dimension", "pipeline", "test_id"]
 m = pa_.merge(pb_, on=k, suffixes=("_a", "_b"))
 own = ["score", "has_output", "slot_weight", "n_pages_in_slot", "page_weight", "points_lost", "n_critical", "n_major",
@@ -79,7 +89,7 @@ badown = [c for c in own if not ((m[c + "_a"].isna() & m[c + "_b"].isna()) | (m[
 unchanged["page_dimension_scores (pipeline-own columns)"] = (not badown and len(m) == len(pa_), badown)
 site_a = {p["pipeline"]: p for p in json.load(open(f"{BASE}/index/site.json"))["pipelines"]}
 site_b = {p["pipeline"]: p for p in json.load(open(P("index/site.json")))["pipelines"]}
-bad_site = [p for p in site_a if {k: v for k, v in site_a[p].items() if k != "leaderboard_rank"} !=
+bad_site = [p for p in site_a if p not in NEW and {k: v for k, v in site_a[p].items() if k != "leaderboard_rank"} !=
             {k: v for k, v in site_b[p].items() if k != "leaderboard_rank"}]
 unchanged["site.json pipeline entries (except rank)"] = (not bad_site, bad_site)
 nb = bad = 0
@@ -87,11 +97,11 @@ for kind in ("metrics", "outputs"):
     for f in glob.glob(f"{BASE}/bundles/{kind}/*/*.json"):
         x = json.load(open(f))["parsers"]; y = json.load(open(f.replace(BASE, OUT)))["parsers"]
         nb += 1
-        bad += any(x[p] != y[p] for p in x) or set(y) - set(x) != set(NEW)
+        bad += any(x[p] != y[p] for p in x if p not in NEW) or set(y) - set(x) != ADDED
 for f in glob.glob(f"{BASE}/bundles/layout_boxes/layout/*.json"):
     x = json.load(open(f))["parsers"]; y = json.load(open(f.replace(BASE, OUT)))["parsers"]
     nb += 1
-    bad += any(x[p] != y[p] for p in x) or set(y) - set(x) != set(NEW)
+    bad += any(x[p] != y[p] for p in x if p not in NEW) or set(y) - set(x) != ADDED
 unchanged["bundles (existing parser entries)"] = (bad == 0, f"{nb - bad}/{nb} bundles identical for existing parsers")
 res["existing_unchanged"] = {"pass": all(v[0] for v in unchanged.values()),
                              "checks": {k: {"pass": bool(v[0]), "detail": v[1]} for k, v in unchanged.items()},

@@ -19,7 +19,13 @@ These come from the dataset's owner and hold for every update:
   with `parent_commit` set; the previous commit must stay available for rollback.
 - **Don't post anything on run-llama repos.**
 - **If something is unclear, or would take much longer than planned, stop and ask.** Never "decide" a scoring question.
-- Run everything locally (this VM). Don't use GitHub Actions for this.
+- The build, checks and upload run locally (the maintainer's VM). Scoring may run either locally
+  (`score_local.sh`) or on GitHub Actions (the "Build metrics" workflow of this public repo, several pipelines per
+  job, all jobs in parallel), which is much faster for a full re-score. Its outputs are artifacts kept 30 days;
+  download them with `gh run download`.
+- Our changes to ParseBench (`full_events.patch`, `register_pipelines.patch`) are rebased onto every new scorer
+  commit. Where upstream has since added or fixed something a patch did, upstream's version wins and our hunk is
+  dropped (an emptied patch is skipped); ours stays only for what upstream lacks (uncapped events).
 
 ## The update, step by step
 
@@ -39,6 +45,7 @@ ends with a verdict:
 | --- | --- | --- |
 | `UP_TO_DATE` | nothing to do | stop |
 | `ADD_ONLY` | only new pipelines; scorer, ground truth, existing outputs and leaderboard values unchanged | steps 2–9 |
+| `NEEDS_REVIEW` for a new scorer or ground truth only | outputs unchanged, leaderboard re-scored | "Full re-score" below, after the owner agrees |
 | `NEEDS_REVIEW` | anything else; each `STOP:` line says why | stop and ask, see "When the verdict is NEEDS_REVIEW" |
 
 Pin the ParseBench commit and dataset commit it printed; use them for every later step.
@@ -153,6 +160,28 @@ a local build (`pnpm run build:vinext && npx vite preview`) in a headless browse
 production, and check production. Build logs: `cf builds list` / `cf builds logs <id>` (the Builds API takes only the
 `cf` user sign-in, not account tokens).
 
+## Full re-score (new scorer commit or ground truth)
+
+Every pipeline's scores change; their outputs don't. Get the owner's go-ahead first, then:
+
+1. **Rebase the patches** onto the new scorer commit (`scored_with` in `results-v2.yaml`): apply each on a
+   checkout of that commit, check whether upstream already has the change (a registration can apply cleanly yet
+   duplicate one upstream added, which fails with "Pipeline already registered"), drop what upstream has, and
+   regenerate the patch file with `git diff <scorer commit> HEAD`.
+2. **Prove the replace mode** on the current dataset before scoring anything: build with
+   `--replace <control>:<the control's published-scorer deliverable>:…` and run
+   `python check_replace.py work/base work/out`. It must print `REPLACE PROOF PASS`.
+3. **Prove the ground-truth rebuild** at the dataset's current revision:
+   `python groundtruth.py <gt dir at that revision> <revision> <base with groundtruth/ and bundles/groundtruth/> /dev/null --check`
+   must report 0 differing bundles and "same content" for both tables (`fetch_base.py --all` fetches those files).
+4. **Score every pipeline** with the new scorer and ground truth: the "Build metrics" workflow
+   (`gh workflow run metrics.yml -f scorer_commit=… -f data_revision=…`, `pipelines.json` listing them all), then
+   `gh run download <run id> -D work/deliver`. Re-score the control locally too and compare its `next_score.json`.
+   Every pipeline's six dimensions must match `leaderboard-v2.csv` to its rounding.
+5. **Build**: `groundtruth.py` at the new revision into `work/out`, then `build.py --replace` for every pipeline
+   (`--scorer-revision`, `--groundtruth-revision` update `site.json`), into the same `work/out`.
+6. **Validate** with every pipeline listed, then steps 7–9 of the update as usual. Almost every file changes.
+
 ## When the verdict is NEEDS_REVIEW
 
 Each case needs a decision from the dataset's owner, and usually new code. Handle them with the same pattern: prove
@@ -196,7 +225,9 @@ These rules were reverse-engineered from the published data; the verify scripts 
 | `rows.py` | per-pipeline rows: scores, events, layout, bundle entries |
 | `aggregates.py`, `index_files.py` | pipelines table, slots, page-dimension scores; `index/*.json` |
 | `check_control.py`, `verify_aggregates.py`, `verify_index.py` | step 4: prove the code on existing data |
-| `build.py` | step 5: incremental build (adds pipelines only) |
+| `build.py` | step 5: adds pipelines (`--add`) or re-scores ones in the dataset (`--replace`) |
+| `check_replace.py` | proves `--replace` on the control before a full re-score |
+| `groundtruth.py` | ground-truth table, bundles and document links at a ParseBench-2 revision |
 | `validate.py`, `finalize.py` | steps 6–7 |
 | `fetch_base.py` | step 3: the dataset at a commit, reusing files on disk |
 | `changeset.py`, `upload.py`, `sync_main.py` | step 8 |

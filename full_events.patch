@@ -1,5 +1,5 @@
 diff --git a/src/parse_bench/evaluation/metrics/parse/chart_next.py b/src/parse_bench/evaluation/metrics/parse/chart_next.py
-index 9382ae3..ad41495 100644
+index 3ddea39..396e206 100644
 --- a/src/parse_bench/evaluation/metrics/parse/chart_next.py
 +++ b/src/parse_bench/evaluation/metrics/parse/chart_next.py
 @@ -897,7 +897,7 @@ class ChartNextResult:
@@ -45,10 +45,10 @@ index 14c00b4..76ab67c 100644
                  }
                  for e in self.events[:max_examples]
 diff --git a/src/parse_bench/evaluation/metrics/parse/forms_v2.py b/src/parse_bench/evaluation/metrics/parse/forms_v2.py
-index 77d616c..86a48f8 100644
+index 0299e72..00df91d 100644
 --- a/src/parse_bench/evaluation/metrics/parse/forms_v2.py
 +++ b/src/parse_bench/evaluation/metrics/parse/forms_v2.py
-@@ -3930,7 +3930,7 @@ class FormsResult:
+@@ -3935,7 +3935,7 @@ class FormsResult:
                  c[e.cls] += 1
          return c
  
@@ -57,7 +57,7 @@ index 77d616c..86a48f8 100644
          from parse_bench.evaluation.metric_policy import atom_inputs
  
          kinds: dict[str, int] = {}
-@@ -3952,9 +3952,9 @@ class FormsResult:
+@@ -3957,9 +3957,9 @@ class FormsResult:
                  {
                      "kind": e.kind,
                      "severity": e.cls,
@@ -93,10 +93,10 @@ index 96f8f9c..a81eae8 100644
              if s in ("critical", "major", "minor")
          ][:examples]
 diff --git a/src/parse_bench/evaluation/metrics/parse/text_next.py b/src/parse_bench/evaluation/metrics/parse/text_next.py
-index 59f438c..c7c27be 100644
+index 2e12940..ee299f3 100644
 --- a/src/parse_bench/evaluation/metrics/parse/text_next.py
 +++ b/src/parse_bench/evaluation/metrics/parse/text_next.py
-@@ -1227,7 +1227,7 @@ class TextNextResult:
+@@ -1228,7 +1228,7 @@ class TextNextResult:
      n_hyp: int
      events: TextNextEvents
  
@@ -105,7 +105,7 @@ index 59f438c..c7c27be 100644
          return {
              "proportional": self.proportional,
              "floor": self.floor,
-@@ -1252,7 +1252,7 @@ class TextNextResult:
+@@ -1253,7 +1253,7 @@ class TextNextResult:
              "event_kinds": self.events.kinds(),
              "uncharged_repeats": self.events.uncharged,
              "event_examples": [

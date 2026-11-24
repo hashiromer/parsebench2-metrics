@@ -19,7 +19,12 @@ fi
 # Patches, as in the workflow: full_events.patch (uncapped events) and register_pipelines.patch. Earlier
 # patches are dropped first (tracked files only; the scorer's .venv stays), so an updated patch is applied.
 git -C "$WORK/scorer" checkout -q -- .
-for p in full_events.patch register_pipelines.patch; do git -C "$WORK/scorer" apply "$REPO/$p"; done
+# Our changes, rebased onto the scorer commit: a patch upstream has since covered is emptied (its text says so),
+# and an empty one is skipped. Applying a registration upstream already has would fail ("Pipeline already
+# registered"), so that is loud, not silent.
+for p in full_events.patch register_pipelines.patch; do
+  if grep -q '^diff --git' "$REPO/$p"; then git -C "$WORK/scorer" apply "$REPO/$p"; echo "applied $p"; else echo "skipped $p (empty)"; fi
+done
 uv sync -q --project "$WORK/scorer" --frozen --extra runners --extra fast
 
 if [ ! -f "$WORK/gt/.done-$DATA_REV" ]; then
