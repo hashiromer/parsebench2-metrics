@@ -205,6 +205,27 @@ In `parsebench2-explorer/src/lib/config.ts`, update `DATA_COMMIT`, `DATA_UPDATED
 leaderboard revisions in `SOURCES`, and `PARSER_COUNT` (plus the count in its README). New providers may need a rule in
 `src/lib/brands.ts` for their logo.
 
+The leaderboard filters parsers by Open source (upstream category `Open Weight`) / Closed source, and open source by
+Free / Commercial. Every open-source parser needs a license entry in the explorer's `src/lib/licenses.ts`. Run
+`node scripts/check-licenses.mjs` in the explorer (it reads the dataset at `DATA_COMMIT`; pass another commit as its
+argument). It lists every open-source parser without an entry, with candidate Hugging Face models and their declared
+licenses, and exits 1 if any is missing. For each one:
+
+1. Find the model the pipeline runs: the candidate whose name matches, or the model id in the provider file under
+   `src/parse_bench/inference/providers/parse/` of ParseBench. Raw models only: the license is the weights' license,
+   never that of an app or library that runs them, even when the usual app's is stricter (MinerU2.5-Pro is "free":
+   its weights are Apache-2.0, although the MinerU app adds revenue limits).
+2. Open `https://huggingface.co/<model>`: the `license:` in the card's metadata, then the `LICENSE` file itself.
+   `license: other` or a custom name always means reading the file.
+3. `"free"` if you can do anything with it, business use included, with nothing beyond attribution: Apache-2.0,
+   MIT, BSD, OpenMDW. Everything else is `"commercial"`, with a short `note` on the condition: copyleft (AGPL),
+   non-commercial only (CC-BY-NC), a revenue or funding cap (modified OpenRAIL-M: Datalab, OCRia), a region or user
+   cap (Tencent Hunyuan), no use in a competing service.
+4. Add `pipeline: hf("<model>", "<license name>", "<free|commercial>", "<note>")`. Ask the user when a license is
+   unclear.
+
+A parser with no entry still shows under Open source but under neither Free nor Commercial.
+
 Check pages with [`site_check/check.mjs`](site_check/check.mjs) (headless Chromium; add the new parsers' pages and
 some re-scored ones to `site_check/pages.json`): first on a local build (`pnpm run build:vinext && npx vite preview
 --port 4173`, then `BASE=http://localhost:4173`), because on a branch preview (`*.workers.dev`) pages that fetch the
