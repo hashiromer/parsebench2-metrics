@@ -240,9 +240,11 @@ Each of these cost time in an earlier update.
   with nulls normalized, and compare parquet tables with Arrow equality, not pandas element-wise.
 - **Upstream's pins vs the dataset's.** `results-v2.yaml` may name a newer results commit for a pipeline whose files
   are identical; `detect_changes.py` compares file hashes, not commit ids, and keeps the dataset's pin.
-- **Workers Builds status:** `cf builds list` needs `--worker parsebench2-explorer` and may still come back empty.
-  Confirm a deploy by fetching production and finding the new `DATA_COMMIT` in its JavaScript. The `cf` CLI works
-  only with the user sign-in: `env -u CLOUDFLARE_API_TOKEN cf …`.
+- **Workers Builds status and logs:** `cf builds list --worker <script tag>` takes the Worker's ID, not its name
+  (with the name it returns nothing); the explorer's is `efa3b80d46024203804724103c5f5b9d` (`cf workers scripts
+  search --name parsebench2-explorer`). Then `cf builds get <build uuid>` and `cf builds logs <build uuid>`. A push to
+  `main` builds and deploys in about 90 s. The `cf` CLI works only with the user sign-in:
+  `env -u CLOUDFLARE_API_TOKEN cf …`.
 - **Validation that loads each bundle per pipeline takes hours.** validate.py loads each page's bundles once; keep it
   that way when adding checks.
 
