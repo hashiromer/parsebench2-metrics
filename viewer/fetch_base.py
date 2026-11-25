@@ -1,9 +1,10 @@
 """Assemble the dataset at a commit in --dest, reusing files already on disk and downloading only the rest.
 
-  python fetch_base.py <dataset commit> <dest dir> [<seed dir> ...] [--all]
+  python fetch_base.py <dataset commit> <dest dir> [<seed dir> ...] [--gt | --all]
 
 Only the files the build reads are fetched: the source documents, page images and ground truth (about 17,000 files
-that no update changes) are skipped unless --all is given.
+that no update changes) are skipped. --gt also fetches the ground-truth files (groundtruth/, bundles/groundtruth/),
+which a full re-run rebuilds; --all fetches everything.
 
 For every file in the dataset tree at the commit, the first seed dir holding a file with the same content hash
 (git blob id, or the LFS sha256) is hard-linked into --dest (copied if links aren't possible). Everything else is
@@ -20,9 +21,9 @@ from huggingface_hub import HfApi, hf_hub_download
 
 REPO = os.environ.get("VIEWER_REPO", "Hashir621/parsebench2-viewer")
 SKIP = ("documents/", "images/", "groundtruth/", "bundles/groundtruth/")  # never read or written by the build
-args = [x for x in sys.argv[1:] if x != "--all"]
+args = [x for x in sys.argv[1:] if x not in ("--all", "--gt")]
 commit, dest, seeds = args[0], args[1], args[2:]
-skip = () if "--all" in sys.argv else SKIP
+skip = () if "--all" in sys.argv else SKIP[:2] if "--gt" in sys.argv else SKIP
 api = HfApi()
 commit = api.dataset_info(REPO, revision=commit).sha
 tree = {f.path: f for f in api.list_repo_tree(REPO, repo_type="dataset", revision=commit, recursive=True, expand=True)

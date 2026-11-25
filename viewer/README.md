@@ -5,201 +5,246 @@ dataset that the [ParseBench 2 Explorer](https://github.com/hashiromer/parsebenc
 
 **It is meant to be run by hand, by a person or an AI working with that person, never on a schedule.** Upstream
 (ParseBench, its results repo, its leaderboard) changes often and in ways nobody here controls. Each update therefore
-starts by finding out what changed (step 1). The code covers the common case, adding new pipelines, and stops on
-everything else. Read this whole file before running anything, then read the code you are about to run. The scripts
-encode rules that were reverse-engineered from the published data, and the checks are what keep an update honest.
+starts by finding out what changed (step 1), which picks one of two paths: add new pipelines, or re-run everything.
+Read this whole file before running anything (the "Pitfalls" section especially), then read the code you are about
+to run. The scripts encode rules that were reverse-engineered from the published data, and the checks are what keep
+an update honest.
 
 ## Rules
 
 These come from the dataset's owner and hold for every update:
 
-- **Don't change any number that didn't change upstream.** Existing pipelines' rows, slot scores, timing and bundle
-  entries are kept byte-for-byte (`build.py` asserts this); `validate.py` re-checks it.
+- **Don't change any number that didn't change upstream.** When only pipelines are added, existing pipelines' rows,
+  slot scores, timing and bundle entries are kept byte-for-byte (`build.py` asserts this; `validate.py` re-checks
+  it). A full re-run recomputes everything; it is proved to reproduce the dataset when nothing changed upstream (see
+  History, 2026-11-25), and its leaderboard check must pass for every pipeline.
 - **No force-pushes, no deleting repos or branches, no rewriting HF history.** Every dataset change is a new commit
   with `parent_commit` set; the previous commit must stay available for rollback.
 - **Don't post anything on run-llama repos.**
 - **If something is unclear, or would take much longer than planned, stop and ask.** Never "decide" a scoring question.
+- **A full re-run needs the owner's go-ahead** (it changes almost every file), and so does every upload.
 - The build, checks and upload run locally (the maintainer's VM). Scoring may run either locally
   (`score_local.sh`) or on GitHub Actions (the "Build metrics" workflow of this public repo, several pipelines per
-  job, all jobs in parallel), which is much faster for a full re-score. Its outputs are artifacts kept 30 days;
+  job, all jobs in parallel), which is much faster for a full re-run. Its outputs are artifacts kept 30 days;
   download them with `gh run download`.
 - Our changes to ParseBench (`full_events.patch`, `register_pipelines.patch`) are rebased onto every new scorer
   commit. Where upstream has since added or fixed something a patch did, upstream's version wins and our hunk is
   dropped (an emptied patch is skipped); ours stays only for what upstream lacks (uncapped events).
 
-## The update, step by step
+## Two paths
 
-Use a work directory on the main disk, e.g. `~/match_parsebench/work` (`/tmp` is a 12 GB in-memory drive and runs
-out). Python deps: `uv run --with pandas --with pyarrow --with pyyaml --with huggingface_hub python …`.
+Every update takes one of two paths, picked by `detect_changes.py` (step 1). There is deliberately no third,
+"change only what changed" path: upstream moves faster than anyone can review small changes one by one, so anything
+beyond added pipelines is a full re-run, and the leaderboard check at its end decides whether it is right.
 
-### 1. Find out what changed (read-only)
-
-```bash
-python detect_changes.py --report work/changes.json
-```
-
-It compares ParseBench `main` (`leaderboard/results-v2.yaml`, `leaderboard-v2.csv`) with the dataset's `main` and
-ends with a verdict:
-
-| Verdict | Meaning | What to do |
+| Verdict | When | What to do |
 | --- | --- | --- |
-| `UP_TO_DATE` | nothing to do | stop |
-| `ADD_ONLY` | only new pipelines; scorer, ground truth, existing outputs and leaderboard values unchanged | steps 2–9 |
-| `NEEDS_REVIEW` for a new scorer or ground truth only | outputs unchanged, leaderboard re-scored | "Full re-score" below, after the owner agrees |
-| `NEEDS_REVIEW` | anything else; each `STOP:` line says why | stop and ask, see "When the verdict is NEEDS_REVIEW" |
+| `UP_TO_DATE` | nothing changed (held-back pipelines don't count) | stop |
+| `ADD_ONLY` | only new pipelines; scorer, ground truth, outputs, providers and leaderboard values of the others unchanged | "Add only" below: score just the new ones |
+| `FULL_RERUN` | anything else: a new scorer or ground truth, an existing pipeline's outputs, a provider renamed, leaderboard values moved | "Full re-run" below: re-score and rebuild every pipeline |
+| `NEEDS_REVIEW` | what a re-run can't settle: a pipeline removed upstream, new CSV columns, a different results or ground-truth repo | stop and ask the owner |
 
-Pin the ParseBench commit and dataset commit it printed; use them for every later step.
+A pipeline whose `results_revision` is not a commit (`refs/pr/<n>`: an open, unmerged PR on the results repo, so its
+outputs can still change) is **held back**: left out of the verdict and of `pipelines.json` until upstream pins a
+commit. Tencent Hy4 Flash was held back this way on 2026-11-25.
 
-### 2. Register and score the new pipelines
-
-For each new pipeline:
-
-1. Add it to [`../pipelines.json`](../pipelines.json) (provider exactly as in `leaderboard-v2.csv`, and the
-   `results_revision` from `results-v2.yaml`).
-2. Check ParseBench for the pipeline's registration in `src/parse_bench/inference/pipelines/parse.py` (and its
-   provider). If the scorer commit predates it, add ParseBench's own registration to
-   [`../register_pipelines.patch`](../register_pipelines.patch), copied from upstream, not written here. Without it
-   the layout evaluator falls back to a heuristic adapter and Layout can be off (53.97 vs 53.92 once).
-3. Score locally, plus the control `qwen3_5_4b_vllm_layout`:
-
-   ```bash
-   viewer/score_local.sh work/score <scorer commit> <data revision> <new pipeline> qwen3_5_4b_vllm_layout
-   ```
-
-   The scorer commit and data revision are the ones in `results-v2.yaml` (`scored_with`, `data_revision`). Output:
-   `work/score/deliver/<pipeline>.{jsonl.gz,next_score.json,manifest.json}`. The control's `next_score.json` must
-   equal the dataset's `score_*` for it exactly.
-
-Each new pipeline's six `next_score` values should match `leaderboard-v2.csv` to its 2-decimal rounding. If one
-doesn't, stop: it usually means a missing registration (above) or an upstream scorer change.
-
-### 3. Get the base and the new pipelines' outputs
+## 1. Find out what changed (read-only)
 
 ```bash
-python fetch_base.py <dataset commit> work/<update>/base work/<previous update>/out work/<previous update>/base
-hf download llamaindex/ParseBench-2-results --repo-type dataset --revision <results_revision> \
-    --include "results/<pipeline>/*" --local-dir work/<update>/results --max-workers 4
+uv run --with pandas --with pyarrow --with pyyaml --with huggingface_hub python detect_changes.py \
+    --report work/changes.json --write-pipelines
 ```
 
-`fetch_base.py` hard-links every file that is already on disk with the right content hash and downloads only the
-rest, then checks the whole tree. It skips what the build never reads (source documents, page images, ground truth:
-about 17,000 files), so with the previous update's directories as seeds it usually downloads nothing. Without
-seeds it fetches about 9,300 files (3.5 GB); more than ~6 workers trips HF rate limits (HTTP 429).
+It compares ParseBench `main` (`leaderboard/results-v2.yaml`, `leaderboard-v2.csv`) with the dataset's `main`, prints
+the verdict, and writes the report (pin its ParseBench and dataset commits for every later step). With
+`--write-pipelines` it also rewrites [`../pipelines.json`](../pipelines.json) for an `ADD_ONLY` or `FULL_RERUN`
+verdict: new pipelines added, providers as upstream names them, upstream's pin for a pipeline whose outputs changed,
+and the dataset's own pin kept where the files are the same. It notes new pipelines the scorer commit doesn't
+register: they need [`../register_pipelines.patch`](../register_pipelines.patch) (step A2).
 
-Do the second command for each new pipeline, and for the control (`--local-dir work/results-ctrl`, at the control's
-`results_revision` from `pipelines.json`). Check that the newest results revision only *adds* files to the one the
-dataset is pinned at (compare the two trees); it becomes the dataset's results pin.
+## Add only
 
-### 4. Prove the code still reproduces the base
+### A1. pipelines.json
 
-Before adding anything, prove the code matches the published data. These rebuild existing data and must pass:
+`detect_changes.py --write-pipelines` has added the new pipelines. Check the diff (`git diff ../pipelines.json`).
+
+### A2. Registration
+
+If step 1 noted a new pipeline as not registered at the scorer commit, copy ParseBench's own registration (from the
+upstream commit that added it, in `src/parse_bench/inference/pipelines/parse.py`) into `register_pipelines.patch`.
+Copy it; don't write it. Without it the layout evaluator falls back to a heuristic adapter and Layout can be off
+(53.97 vs 53.92 once).
+
+### A3. Score the new pipelines, plus the control
+
+```bash
+viewer/score_local.sh work/score <scorer commit> <data revision> <new pipeline> qwen3_5_4b_vllm_layout
+```
+
+or the "Build metrics" workflow with `-f pipelines=<new>,qwen3_5_4b_vllm_layout -f leaderboard_commit=<ParseBench
+commit>`. The scorer commit and data revision are `scored_with` and `data_revision` in `results-v2.yaml`. The
+control's `next_score.json` must equal the dataset's `score_*` for it exactly, and each new pipeline's six values
+must match `leaderboard-v2.csv` to its 2-decimal rounding (`compare_scores.py`). If one doesn't, stop: it usually
+means a missing registration (A2) or an upstream scorer change.
+
+### A4. Base and outputs
+
+```bash
+python fetch_base.py <dataset commit> work/<update>/base <previous update's out> <previous update's base>
+python fetch_outputs.py work/<update>/results --pipelines <new>,qwen3_5_4b_vllm_layout --seed <previous results dir>
+```
+
+Both hard-link what is already on disk with the right hash and download only the rest, then check every file. With
+the previous update's directories as seeds they usually download nothing.
+
+### A5. Prove the code still reproduces the base
 
 ```bash
 python check_control.py work/base qwen3_5_4b_vllm_layout work/score/deliver/qwen3_5_4b_vllm_layout.jsonl.gz \
-    work/results-ctrl/results/qwen3_5_4b_vllm_layout <its results_revision>     # per-pipeline rows, events, bundles
-python verify_aggregates.py work/base work/leaderboard-v2.csv                  # pipelines table, slots, page scores
-python verify_index.py work/base                                               # index/*.json
+    work/results/results/qwen3_5_4b_vllm_layout <its results_revision>     # per-pipeline rows, events, bundles
+python verify_aggregates.py work/base work/leaderboard-v2.csv              # pipelines table, slots, page scores
+python verify_index.py work/base                                           # index/*.json
 ```
 
-If one fails, upstream or the dataset format moved. Find out why before going on; don't patch around it.
+If one fails, upstream or the dataset format moved. Find out why; don't patch around it.
 
-### 5. Build
+### A6. Build and validate
 
 ```bash
 PROVIDERS='{"<pipeline>": "<provider>"}' python build.py --base work/base --out work/out \
-    --leaderboard work/leaderboard-v2.csv --results-revision <newest results revision> \
+    --leaderboard work/leaderboard-v2.csv --results-revision <results pin from the report> \
     --add <pipeline>:<deliverable.jsonl.gz>:<next_score.json>:work/results/results/<pipeline>:<its results_revision>
-```
-
-It writes only files whose content changes to `work/out`, plus `work/build_state.json`. Rank is by leaderboard
-Overall.
-
-### 6. Validate
-
-```bash
 python validate.py work/base work/out work/leaderboard-v2.csv <pipeline>[,<pipeline>]   # writes work/checks.json
 ```
 
-Every check must pass. The leaderboard check compares each dimension within the CSV's 2-decimal rounding, and
-Overall as **the mean of the six rounded dimension scores**. That is how ParseBench's `scripts/leaderboard/apply.py`
-computes it, although its README says "unweighted mean". Nine providers differ by more than rounding if you use the
-unrounded mean; that is expected.
+`build.py` writes only files whose content changes, plus `work/build_state.json`; existing pipelines keep every
+value byte-for-byte (it asserts this, and validate re-checks it). Every check must pass (validate exits 1 if not).
 
-### 7. Manifest, validation report, README
+Then "Finish" below, with `work/base` and `work/out`.
 
-Write a `finalize_cfg.json` (see the last update's in "History" below for the shape) and run:
+## Full re-run
+
+Get the owner's go-ahead first (it uploads ~4 GB and changes almost every file), then:
+
+### F1. Rebase the patches (only if the scorer commit changed)
+
+Apply each patch on a checkout of the new scorer commit; where it doesn't apply cleanly use `git apply --3way` and
+resolve. Check whether upstream already has the change: a registration can apply cleanly yet duplicate one upstream
+added (at run time: "Pipeline already registered"). Drop what upstream has; keep ours only for what upstream lacks
+(today: the uncapped events). Regenerate with `git diff <scorer commit> HEAD > ../<patch>`; an emptied patch keeps
+only its explanatory text and is skipped. Register any new pipeline the scorer lacks (A2).
+
+### F2. Score everything on GitHub Actions
 
 ```bash
-python finalize.py work/base work/out work/build_state.json work/checks.json work/finalize_cfg.json
+gh workflow run metrics.yml -R hashiromer/parsebench2-metrics -f scorer_commit=<scored_with> \
+    -f data_revision=<data_revision> -f leaderboard_commit=<ParseBench commit from the report>
 ```
 
-### 8. Upload: one commit on a branch, then sync `main`
+Push `pipelines.json` and the patches first: the workflow uses the repo's `main`. It scores two pipelines per job, 20
+jobs at a time (61 pipelines: 32 jobs, 34 min), and its `check` job compares every pipeline with the leaderboard;
+read its summary before going on. A batch that failed can be re-run alone with `-f pipelines=a,b`.
+
+### F3. Build and validate: one command
 
 ```bash
-python changeset.py work/out <dataset commit> work/changeset.json      # only files that really differ
-python upload.py work/out work/changeset.json <branch> <branch head> "<message>"           # try one commit
-python upload.py … --parts 6                                                                 # only if that fails
-python sync_main.py <branch tip> <main head> "Sync main to <branch> @ <tip>" work/out work/base
+SEEDS=work/seed/dataset RESULTS_SEEDS=work/seed/results viewer/full_rerun.sh work/<update> work/changes.json <run id>
 ```
 
-A single commit sends about 3.5 GB, because the bundles are regular git files, and may answer **504 yet land**.
-`upload.py` checks the branch head before retrying, and so must you: never re-upload blindly. After the upload,
-download a sample of the files back and compare their hashes. `sync_main.py` makes one extra commit so `main`'s tree
-equals the branch tip (no history rewrite).
+`work/seed` is the one local copy kept between updates (10 GB): `dataset/` (the dataset at its last commit, ground
+truth included), `results/` (every pipeline's published outputs) and `gt/` (ParseBench-2 ground truth, with a
+`.done-<revision>` marker). Everything else in `work/` is deleted once an update is uploaded and checked: it can all be
+fetched again. With the seed, the scripts hard-link instead of downloading; add `GT_DIR=work/seed/gt` when the ground
+truth didn't change. After an update, replace `seed/dataset` with the uploaded tree (and `seed/results`, `seed/gt` if
+they changed), check it with `fetch_base.py <new commit> work/seed/dataset --gt`, then delete the work dir.
 
-### 9. Point the explorer at the new commit
+[`full_rerun.sh`](full_rerun.sh) fetches the base with its ground-truth files, the leaderboard (dropping rows of
+held-back pipelines), the run's deliverables (and checks them against the leaderboard again), every pipeline's
+outputs, and the new ground truth; rebuilds the ground-truth tables and bundles (`groundtruth.py`); builds in passes
+of 10 (`build_passes.sh`, about 3.5 min and 5.7 GB per pass); and validates every pipeline. It ends with
+`VALIDATED TREE: <dir>`. Re-running it reuses what is already on disk. `GT_DIR` and `DELIVER` point it at a ground
+truth or deliverables already downloaded.
 
-In `parsebench2-explorer/src/lib/config.ts`, update `DATA_COMMIT` and `DATA_UPDATED_AT` (that commit's time, UTC
-ISO 8601: the site shows it as "updated 3 minutes ago" in the visitor's time zone), the results and leaderboard
-revisions, and `PARSER_COUNT`, plus the count in its README. New providers may need a rule in `src/lib/brands.ts` for
-their logo. Push a branch first: Workers Builds gives it a preview at `<branch>-parsebench2-explorer.hashir.workers.dev`.
+Then "Finish" below, with `work/<update>/stage0` as the base and the validated tree as out.
 
-On that preview address the landing page works, but pages that fetch the dataset from the browser fail with a CORS
-error: Hugging Face doesn't allow the `*.workers.dev` origin, for old and new commits alike. So check those pages with
-a local build (`pnpm run build:vinext && npx vite preview`) in a headless browser, then merge to `main`, which deploys
-production, and check production. Build logs: `cf builds list` / `cf builds logs <id>` (the Builds API takes only the
-`cf` user sign-in, not account tokens).
+## Finish (both paths)
 
-## Full re-score (new scorer commit or ground truth)
+### 1. Manifest, validation report, README
 
-Every pipeline's scores change; their outputs don't. Get the owner's go-ahead first, then:
+Write a `finalize_cfg.json` (copy the last update's, see "History", and update every field) and run:
 
-1. **Rebase the patches** onto the new scorer commit (`scored_with` in `results-v2.yaml`): apply each on a
-   checkout of that commit, check whether upstream already has the change (a registration can apply cleanly yet
-   duplicate one upstream added, which fails with "Pipeline already registered"), drop what upstream has, and
-   regenerate the patch file with `git diff <scorer commit> HEAD`.
-2. **Prove the replace mode** on the current dataset before scoring anything: build with
-   `--replace <control>:<the control's published-scorer deliverable>:…` and run
-   `python check_replace.py work/base work/out`. It must print `REPLACE PROOF PASS`.
-3. **Prove the ground-truth rebuild** at the dataset's current revision:
-   `python groundtruth.py <gt dir at that revision> <revision> <base with groundtruth/ and bundles/groundtruth/> /dev/null --check`
-   must report 0 differing bundles and "same content" for both tables (`fetch_base.py --all` fetches those files).
-4. **Score every pipeline** with the new scorer and ground truth: the "Build metrics" workflow
-   (`gh workflow run metrics.yml -f scorer_commit=… -f data_revision=…`, `pipelines.json` listing them all), then
-   `gh run download <run id> -D work/deliver`. Re-score the control locally too and compare its `next_score.json`.
-   Every pipeline's six dimensions must match `leaderboard-v2.csv` to its rounding.
-5. **Build**: `groundtruth.py` at the new revision, then `build.py --replace` for every pipeline
-   (`--scorer-revision`, `--groundtruth-revision` update `site.json`). One pipeline needs about 300 MB, so on a
-   22 GB machine replace them in passes of 10: each pass's `--base` is the previous tree with that pass's `--out`
-   hard-linked over it (`cp -al`). Before finalize, unlink `viewer_manifest.json`, `validation_report.json` and
-   `README.md` in the final tree: they are hard links into the base, and finalize writes them in place.
-6. **Validate** with every pipeline listed, then steps 7–9 of the update as usual. Almost every file changes.
+```bash
+python finalize.py <base> <out> <build_state.json> <checks.json> work/finalize_cfg.json
+```
 
-## When the verdict is NEEDS_REVIEW
+In `readme_replace`, write `{overall_off_count}` and `{overall_off_range}` where the README says for how many parsers
+the unrounded mean differs from the published Overall: finalize fills them in. The leaderboard computes Overall as
+**the mean of the six rounded dimension scores** (`scripts/leaderboard/apply.py`, although its README says
+"unweighted mean"), so a dozen or so parsers differ by more than rounding from the unrounded mean; that is expected.
 
-Each case needs a decision from the dataset's owner, and usually new code. Handle them with the same pattern: prove
-the change on existing data first, as `check_control.py` does.
+### 2. Upload: one commit on a branch, then sync `main`
 
-- **Scorer commit or ground truth changed.** Every pipeline may score differently. Check that both patches still apply
-  and touch no scoring code. Rescore everything, with the control first. This is a full rebuild, not an increment.
-- **An existing pipeline's outputs changed** (`results_changed` lists the subsets). `build.py` only adds pipelines.
-  Replacing one means dropping its rows everywhere (scores, events, layout, bundles) and re-adding it. Write and
-  prove that before using it.
-- **A pipeline was removed or renamed upstream.** Ask whether the viewer should drop it, keep it, or rename it.
-- **Leaderboard values changed for pipelines whose outputs didn't.** Something in ParseBench's scoring or rounding
-  moved. Find the upstream commit that did it before trusting either side.
-- **CSV columns changed** (a new dimension, for example). The dataset format itself has to change; plan it with the
-  owner.
+```bash
+python changeset.py <out> <dataset commit> work/changeset.json --local <base>       # seconds; without --local, minutes
+python upload.py <out> work/changeset.json <branch> <dataset commit> "<message>"      # one commit
+python verify_upload.py <branch> <out> <dataset commit>                              # every file, by hash; parent
+python sync_main.py <branch tip> <main head> "Sync main to <branch> @ <tip>" <out> <base>
+python verify_upload.py main <out> <main head before the sync>
+```
+
+Check that `main` is still the dataset commit you built on before uploading. A single commit sends ~4 GB on a full
+re-run (the JSON bundles are plain git files, not Xet, and list parsers in rank order, so most change) and may answer
+**504 yet land**: `upload.py` checks the branch head before retrying, and so must you; never re-upload blindly.
+`--parts 6` splits it only if a single commit fails. `sync_main.py` makes one extra commit so `main`'s tree equals
+the branch tip (no history rewrite).
+
+### 3. Point the explorer at the new commit
+
+In `parsebench2-explorer/src/lib/config.ts`, update `DATA_COMMIT`, `DATA_UPDATED_AT` (that commit's time, UTC ISO
+8601: the site shows it as "updated 3 minutes ago" in the visitor's time zone), the scorer, ground-truth, results and
+leaderboard revisions in `SOURCES`, and `PARSER_COUNT` (plus the count in its README). New providers may need a rule in
+`src/lib/brands.ts` for their logo.
+
+Check pages with [`site_check/check.mjs`](site_check/check.mjs) (headless Chromium; add the new parsers' pages and
+some re-scored ones to `site_check/pages.json`): first on a local build (`pnpm run build:vinext && npx vite preview
+--port 4173`, then `BASE=http://localhost:4173`), because on a branch preview (`*.workers.dev`) pages that fetch the
+dataset fail with a CORS error (Hugging Face doesn't allow that origin). Then merge to `main`, which deploys
+production in about a minute, and run it again with `BASE=https://parsebench.hashiromer.com`. It must end with
+"0 with problems"; deliberate bad links (kind `bad`) are listed apart and get the app's not-found view.
+
+## Pitfalls (read before running anything)
+
+Each of these cost time in an earlier update.
+
+- **Each shell command starts fresh.** Variables set in one command (`W=…`) are gone in the next; a script run with
+  `$W` unset gets `/stage0`. Set them in the same command or use full paths.
+- **The VM's shell is zsh.** `$c:` in a loop is a zsh modifier, not a colon; run such loops with `bash -c`.
+  `pkill -f <pattern>` matches its own shell and kills it (exit 144); stop a server by its port's PID
+  (`ss -ltnp | grep :4173`).
+- **`ls` on the VM is aliased to a decorated listing** (sizes, icons): never pipe it into another command. Use
+  `find … -printf '%f\n'` or `command ls -1`.
+- **`/tmp` is a 12 GB in-memory drive.** Keep work dirs on the main disk (`~/match_parsebench/work`). A full re-run
+  needs about 10 GB beyond the outputs (4.5 GB) and deliverables.
+- **Hard-linked trees.** The stage trees share files with the base. Anything that writes into one must write a new
+  file and rename it over the old one (finalize.py does), never write through it, or the base changes too.
+- **Don't build 61 pipelines in one `build.py` call**: it runs out of memory. `build_passes.sh` does passes of 10.
+- **The Hub listing of the dataset with `expand=True` takes many minutes** (26,000 files). Use
+  `changeset.py --local` against the verified base; `verify_upload.py` lists once per commit.
+- **More than ~4–6 download workers trips HF rate limits** (HTTP 429). The scripts use 4 and retry with back-off; the
+  workflow downloads the ground truth once into the Actions cache instead of in every job.
+- **Ground truth can change type.** v2.08 stores `metadata`/`test_rules` of 11 corrected pages as a JSON object
+  instead of a string; `groundtruth.py` encodes them like the others (`json.dumps(…, ensure_ascii=False)`).
+- **Some fields sit at a record's top level**, not in `raw_output` (`processing_duration_ms` for
+  `llamaparse_cost_effective`); `rows.py` reads both.
+- **Nulls compare unequal.** NaN vs None for pages with no output made validate report 45 false mismatches; compare
+  with nulls normalized, and compare parquet tables with Arrow equality, not pandas element-wise.
+- **Upstream's pins vs the dataset's.** `results-v2.yaml` may name a newer results commit for a pipeline whose files
+  are identical; `detect_changes.py` compares file hashes, not commit ids, and keeps the dataset's pin.
+- **Workers Builds status:** `cf builds list` needs `--worker parsebench2-explorer` and may still come back empty.
+  Confirm a deploy by fetching production and finding the new `DATA_COMMIT` in its JavaScript. The `cf` CLI works
+  only with the user sign-in: `env -u CLOUDFLARE_API_TOKEN cf …`.
+- **Validation that loads each bundle per pipeline takes hours.** validate.py loads each page's bundles once; keep it
+  that way when adding checks.
 
 ## What the code encodes
 
@@ -216,24 +261,28 @@ These rules were reverse-engineered from the published data; the verify scripts 
 - Dimension scores are the scorer's own `next_score`.
 - Severity: `text_next` and `chart_next` events carry none, so it comes from the manifest's `severity_maps`. Chart
   `legend lost` maps to null, which is expected.
-- About 205 of 826 published slot scores differ in the last binary digit from every formula tried. Existing pipelines
-  keep their published values; new ones use `fsum / n`. This is recorded in the manifest's deviations.
+- Slot scores are `math.fsum / n`. Before the 2026-11-24 re-score about 205 of 826 published ones differed from every
+  formula in the last binary digit; that re-score recomputed them all, so every pipeline now uses the formula.
 
 ## Files
 
 | File | Does |
 | --- | --- |
-| `detect_changes.py` | step 1: what changed upstream, and a verdict (read-only) |
-| `score_local.sh` | step 2: score pipelines on this machine, as `.github/workflows/metrics.yml` does |
+| `detect_changes.py` | step 1: what changed upstream, the verdict, and `pipelines.json` for it (read-only otherwise) |
+| `score_local.sh` | score pipelines on this machine, as `.github/workflows/metrics.yml` does |
+| `compare_scores.py` | deliverables' six dimensions against `leaderboard-v2.csv` (also the workflow's `check` job) |
+| `fetch_base.py`, `fetch_outputs.py` | the dataset at a commit; pipelines' published outputs at their pins. Both reuse files on disk |
 | `rows.py` | per-pipeline rows: scores, events, layout, bundle entries |
 | `aggregates.py`, `index_files.py` | pipelines table, slots, page-dimension scores; `index/*.json` |
-| `check_control.py`, `verify_aggregates.py`, `verify_index.py` | step 4: prove the code on existing data |
-| `build.py` | step 5: adds pipelines (`--add`) or re-scores ones in the dataset (`--replace`) |
-| `check_replace.py` | proves `--replace` on the control before a full re-score |
+| `check_control.py`, `verify_aggregates.py`, `verify_index.py` | A5: prove the code on existing data |
+| `build.py` | adds pipelines (`--add`) or rebuilds ones in the dataset (`--replace`) |
 | `groundtruth.py` | ground-truth table, bundles and document links at a ParseBench-2 revision |
-| `validate.py`, `finalize.py` | steps 6–7 |
-| `fetch_base.py` | step 3: the dataset at a commit, reusing files on disk |
-| `changeset.py`, `upload.py`, `sync_main.py` | step 8 |
+| `build_passes.sh` | full re-run build: every pipeline, in passes, over hard-linked trees |
+| `full_rerun.sh` | F3: the whole full re-run from deliverables to a validated tree |
+| `check_replace.py` | proof that `--replace` with a pipeline's own deliverable reproduces the base |
+| `validate.py`, `finalize.py` | checks; manifest, validation report and README |
+| `changeset.py`, `upload.py`, `verify_upload.py`, `sync_main.py` | upload and its checks |
+| `site_check/` | headless page check of the explorer, local build and production |
 
 ## History
 
@@ -251,3 +300,11 @@ These rules were reverse-engineered from the published data; the verify scripts 
   a record's top level for some pipelines (rows.py now reads it there); validate's join check treated the 45
   no-output rows as mismatches. Dataset `aceefd8` on branch `rescore-2026-11-24` (504, landed, 8 min); 13,569 files
   changed; every file on the branch verified by hash.
+- **2026-11-25**, no data change. Upstream added Tencent Hy4 Flash on an open results PR (`refs/pr/21`): held back.
+  Turned this run's one-off fixes into code: two paths (add only, or full re-run) chosen by `detect_changes.py`,
+  which now holds back unmerged pins and notes unregistered pipelines; `full_rerun.sh` (with `fetch_outputs.py`,
+  `build_passes.sh`); `changeset.py --local`; `verify_upload.py`; finalize replaces files instead of writing through
+  hard links and fills the Overall-rounding counts; the workflow checks scores against the leaderboard; the page check
+  moved into `site_check/`. Local work data deleted except `work/seed` (44 GB freed). Proof of the full re-run path: `full_rerun.sh` (with `FORCE=1`) on the live dataset
+  `797e049` with the deliverables of run 45504854002 rebuilt all 61 pipelines in 7 passes (25 min), validated, and,
+  after `finalize.py`, matched the live dataset in every one of its 13,574 files (`changeset.py --local`: 0 changed).

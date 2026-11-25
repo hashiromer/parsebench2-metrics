@@ -25,6 +25,10 @@ on:
         description: Pipelines scored side by side on one runner
         type: number
         default: 2
+      leaderboard_commit:
+        description: run-llama/ParseBench commit whose leaderboard-v2.csv the scores must match (empty = skip the check)
+        type: string
+        default: ""
 
 permissions:
   contents: read
@@ -174,3 +178,36 @@ jobs:
           name: metrics-batch-${{ matrix.batch }}
           path: deliver/
           retention-days: 30
+
+  # One summary for the whole run: every pipeline's six dimensions against leaderboard-v2.csv at
+  # leaderboard_commit (compare_scores.py, the same check the runbook runs locally). It reads only the small
+  # next_score.json files, so a mismatch shows here before anyone downloads the deliverables.
+  check:
+    needs: score
+    if: ${{ always() && inputs.leaderboard_commit != '' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: metrics-batch-*
+          path: deliver
+
+      - name: Compare with the leaderboard
+        env:
+          LB_COMMIT: ${{ inputs.leaderboard_commit }}
+          ONLY: ${{ inputs.pipelines }}
+        run: |
+          curl -fsSL "https://raw.githubusercontent.com/run-llama/ParseBench/$LB_COMMIT/leaderboard-v2.csv" -o leaderboard-v2.csv
+          python3 - <<'EOF'
+          import json, os
+          rows = json.load(open("pipelines.json"))
+          only = [p.strip() for p in os.environ["ONLY"].split(",") if p.strip()]
+          json.dump([r for r in rows if not only or r["pipeline"] in only], open("selected.json", "w"))
+          EOF
+          set +e
+          python3 viewer/compare_scores.py deliver leaderboard-v2.csv selected.json | tee compare.txt
+          rc=${PIPESTATUS[0]}
+          { echo "### Scores vs leaderboard-v2.csv @ ${LB_COMMIT:0:7}"; echo '```'; cat compare.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          exit $rc

@@ -190,3 +190,4 @@ for k, v in res.items():
         for kk, vv in v.get("checks", {}).items():
             print("   ", kk, vv)
 print("ALL PASS" if res["all_pass"] else "SOME CHECKS FAILED")
+sys.exit(0 if res["all_pass"] else 1)

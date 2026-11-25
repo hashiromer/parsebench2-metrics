@@ -12,11 +12,14 @@ patches are applied, and neither touches the scoring code:
 
 - [`full_events.patch`](full_events.patch) removes the caps and truncation on the event examples each metric
   reports. Scores are unaffected.
-- [`register_pipelines.patch`](register_pipelines.patch) is ParseBench's own registration of the pipelines
-  published after the scorer commit (`parse.py` from `7d8e0f6`, identical at `2da904b`, the commit upstream verified
-  them with; `liteparse_ocria_nano` from `969ace0`, PR #317). The layout evaluator picks its adapter from the pipeline registry. Without the registration an unknown
-  pipeline falls back to a heuristic adapter: GPT-6.2 sol (medium) then scored 53.97 on Layout instead of the
-  leaderboard's 53.92.
+- [`register_pipelines.patch`](register_pipelines.patch) holds ParseBench's own registration of pipelines published
+  after the scorer commit, copied from upstream. It is empty (text only, skipped) at scorer `d6209da`, which registers
+  every pipeline itself. The layout evaluator picks its adapter from the pipeline registry; without the registration
+  an unknown pipeline falls back to a heuristic adapter (GPT-6.2 sol (medium) once scored 53.97 on Layout instead of
+  the leaderboard's 53.92).
+
+Both are rebased onto every new scorer commit; where upstream has since done what a patch did, upstream's version
+wins and our hunk is dropped.
 
 **Updating the viewer dataset?** Start with [`viewer/README.md`](viewer/README.md): it is the runbook for the whole
 update (find what changed upstream, score, build, validate, upload) and holds the build code.
@@ -32,8 +35,10 @@ schedule trigger. The inputs are:
 | Input | Default | Meaning |
 | --- | --- | --- |
 | `pipelines` | all | Comma-separated names from [`pipelines.json`](pipelines.json) |
-| `scorer_commit` | `d7efdbc…` | `run-llama/ParseBench` commit |
-| `data_revision` | `2d9a234…` | `llamaindex/ParseBench-2` ground-truth commit |
+| `scorer_commit` | `d6209da…` | `run-llama/ParseBench` commit |
+| `data_revision` | `2e95407…` | `llamaindex/ParseBench-2` ground-truth commit |
+| `per_job` | 2 | pipelines scored side by side on one runner (61 pipelines: 32 jobs, 20 at a time, 34 min) |
+| `leaderboard_commit` | none | ParseBench commit whose `leaderboard-v2.csv` every score must match (a final `check` job; skipped if empty) |
 
 From the command line:
 
@@ -41,7 +46,8 @@ From the command line:
 gh workflow run metrics.yml -R hashiromer/parsebench2-metrics -f pipelines=qwen3_5_4b_vllm_layout
 ```
 
-Each job uploads a `metrics-<pipeline>` artifact with these files:
+Each job uploads a `metrics-batch-<n>` artifact (kept 30 days; `gh run download <run id>`) with these files per
+pipeline:
 
 - `<pipeline>.jsonl.gz`: one line per page, with every metric and all of its events
 - `<pipeline>.next_score.json`: the six dimension scores

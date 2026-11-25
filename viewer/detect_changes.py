@@ -12,8 +12,21 @@ viewer_manifest.json and pipelines.parquet (at --dataset-rev):
     dataset was built from and the one results-v2.yaml now names. A new revision with identical files is not a change.
   * leaderboard values that differ from the ones stored in pipelines.parquet, and CSV columns that are new or gone
 
-The verdict at the end says whether the change is one the build supports as is (only added pipelines) or one that
-needs a person (or an AI, with the person) to look first. See README.md for what to do in each case.
+The verdict at the end picks one of two paths (README.md):
+
+  UP_TO_DATE    nothing to do
+  ADD_ONLY      only new pipelines, nothing else changed: score just those and add them
+  FULL_RERUN    anything else (scorer, ground truth, an existing pipeline's outputs, a provider name, leaderboard
+                values): re-score every pipeline and rebuild; the leaderboard check at the end decides
+  NEEDS_REVIEW  what a re-run can't settle: a pipeline removed upstream, new CSV columns, other repos
+
+A pipeline whose results_revision is not a commit (refs/pr/<n>: an open, unmerged PR on the results repo, so its
+outputs can still change) is held back: left out of everything above and listed as held back. New pipelines the
+scorer commit doesn't register yet are noted (they need register_pipelines.patch).
+
+--write-pipelines rewrites ../pipelines.json for the verdict: new pipelines added, providers as upstream names them,
+upstream's pin for a pipeline whose outputs changed, the dataset's own pin kept otherwise (same files). The report's
+"results_pin" is the newest of those pins: the dataset-level results revision for build.py.
 """
 from __future__ import annotations
 
@@ -56,6 +69,7 @@ def main():
     ap.add_argument("--parsebench-rev", default="main")
     ap.add_argument("--dataset-rev", default="main")
     ap.add_argument("--report", default="changes.json")
+    ap.add_argument("--write-pipelines", action="store_true", help="rewrite ../pipelines.json for this verdict")
     a = ap.parse_args()
     api = HfApi()
 
@@ -74,11 +88,13 @@ def main():
     src = man["sources"]
     rep["scorer"] = {"dataset": src["scorer"]["revision"], "upstream": y.get("scored_with")}
     rep["ground_truth"] = {"dataset": src["groundtruth"]["revision"], "upstream": y.get("data_revision")}
+    rescore = []  # any of these: FULL_RERUN
+    full = rescore.append
     if rep["scorer"]["dataset"] != rep["scorer"]["upstream"]:
-        stop("scorer commit changed: every pipeline may score differently; full_events.patch and "
-             "register_pipelines.patch must be checked against the new scorer before anything is rescored")
+        rescore.append("scorer commit changed: every pipeline may score differently; rebase full_events.patch and "
+                       "register_pipelines.patch onto the new scorer before anything is rescored")
     if rep["ground_truth"]["dataset"] != rep["ground_truth"]["upstream"]:
-        stop("ground-truth revision changed: every pipeline needs rescoring")
+        rescore.append("ground-truth revision changed: every pipeline needs rescoring")
     for k in ("results_repo", "data_repo"):
         exp = RESULTS if k == "results_repo" else src["groundtruth"]["repo"]
         if y.get(k) != exp:
@@ -87,6 +103,16 @@ def main():
     # ---- pipelines ----------------------------------------------------------------------------------------------------
     up = {r["pipeline"]: r for r in y["rows"]}
     have = {r["pipeline"]: r for r in pl.to_dict("records")}
+    is_sha = lambda v: len(str(v)) == 40 and all(c in "0123456789abcdef" for c in str(v))
+    rep["held_back"] = {p: up[p]["results_revision"] for p in up if not is_sha(up[p]["results_revision"])}
+    for p, rev in sorted(rep["held_back"].items()):
+        kind = "an open (unmerged) PR on the results repo" if str(rev).startswith("refs/pr/") else "not a commit"
+        if p in have:
+            stop(f"{p} is in the dataset but upstream now pins it to {rev!r} ({kind}): ask the owner")
+        else:
+            note(f"held back: {p} (results_revision {rev!r} is {kind}; its outputs can still change). It is left out "
+                 "until upstream pins a commit")
+    up = {p: r for p, r in up.items() if p not in rep["held_back"]}
     rep["added"] = sorted(set(up) - set(have))
     rep["removed"] = sorted(set(have) - set(up))
     rep["renamed"] = {p: {"dataset": have[p]["provider"], "upstream": up[p]["provider"]}
@@ -96,9 +122,10 @@ def main():
     if unknown_keys:
         note(f"results-v2.yaml rows have new keys: {sorted(unknown_keys)}")
     if rep["removed"]:
-        stop(f"pipelines removed upstream: {rep['removed']} (the build only adds; removing needs code)")
+        stop(f"pipelines removed upstream: {rep['removed']}: ask the owner whether the viewer drops them (the build "
+             "can't remove a pipeline yet)")
     if rep["renamed"]:
-        stop(f"provider names changed: {rep['renamed']}")
+        full(f"provider names changed: {rep['renamed']}")
     if rep["not_verified"]:
         note(f"pipelines not marked verified upstream: {rep['not_verified']}")
 
@@ -121,14 +148,20 @@ def main():
         diff = sorted(k.split("/")[-1] for k in set(o) | set(n) if o.get(k) != n.get(k))
         if diff:
             rep["results_changed"][p] = {"from": old, "to": new, "files": diff}
+    # a new pipeline the scorer commit doesn't register falls back to a heuristic layout adapter (README, A2)
+    scorer_parse = github_file(y.get("scored_with") or pb_sha, "src/parse_bench/inference/pipelines/parse.py")
+    rep["unregistered_at_scorer"] = sorted(p for p in rep["added"] if f'"{p}"' not in scorer_parse)
+    if rep["unregistered_at_scorer"]:
+        note(f"not registered at the scorer commit (copy ParseBench's registration into register_pipelines.patch): "
+             f"{rep['unregistered_at_scorer']}")
     rep["added_files"] = {p: sorted(k.split("/")[-1] for k in T[up[p]["results_revision"]]
                                     if k.startswith(f"results/{p}/")) for p in rep["added"]}
     for p, fs in rep["added_files"].items():
         if len(fs) != 13:
             stop(f"{p}: {len(fs)} results files at {up[p]['results_revision'][:7]} (expected 13 subsets)")
     if rep["results_changed"]:
-        stop(f"published outputs changed for {len(rep['results_changed'])} existing pipelines: rescoring them "
-             "replaces rows, which build.py does not do yet")
+        full(f"published outputs changed for {len(rep['results_changed'])} existing pipelines: "
+             f"{sorted(rep['results_changed'])}")
 
     # ---- leaderboard ----------------------------------------------------------------------------------------------
     cols = set(lb[0]) if lb else set()
@@ -147,28 +180,59 @@ def main():
         if d:
             rep["leaderboard_changed"][p] = d
     lb_only = {p: v for p, v in rep["leaderboard_changed"].items() if p not in rep["results_changed"]}
-    if lb_only:
-        stop(f"leaderboard values changed for {len(lb_only)} pipelines whose outputs did not: check the scorer, "
-             "rounding and ParseBench's scripts/leaderboard before trusting either side")
+    if lb_only and rescore:
+        note(f"leaderboard values changed for {len(lb_only)} pipelines, as expected after a re-score")
+    elif lb_only:
+        full(f"leaderboard values changed for {len(lb_only)} pipelines though scorer, ground truth and outputs did "
+             "not: re-run everything; if the re-run doesn't match the leaderboard, stop and find the upstream change")
+
+    # ---- pipelines.json for this verdict ----------------------------------------------------------------------------
+    rows = [{"provider": up[p]["provider"], "pipeline": p,
+             "results_revision": up[p]["results_revision"] if p in rep["results_changed"] else have[p]["results_revision"]}
+            for p in have if p in up]
+    rows += [{"provider": up[p]["provider"], "pipeline": p, "results_revision": up[p]["results_revision"]}
+             for p in rep["added"]]
+    rep["pipelines"] = rows
+    pins = {r["results_revision"] for r in rows}
+    rep["results_pin"] = next((c.commit_id for c in api.list_repo_commits(RESULTS, repo_type="dataset")
+                               if c.commit_id in pins), None)
 
     # ---- verdict ----------------------------------------------------------------------------------------------------
+    rep["rescore_reasons"] = rescore
     if rep["stop_reasons"]:
         rep["verdict"] = "NEEDS_REVIEW"
+        rep["stop_reasons"] += rescore
+    elif rescore:
+        rep["verdict"] = "FULL_RERUN"
     elif rep["added"]:
         rep["verdict"] = "ADD_ONLY"
     else:
         rep["verdict"] = "UP_TO_DATE"
     json.dump(rep, open(a.report, "w"), indent=1, default=str)
+    if a.write_pipelines and rep["verdict"] in ("ADD_ONLY", "FULL_RERUN"):
+        import os
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "pipelines.json")
+        old = json.load(open(path))
+        order = [r["pipeline"] for r in old] + [p for p in rep["added"]]
+        by = {r["pipeline"]: r for r in rows}
+        out = [by[p] for p in order if p in by]
+        open(path, "w").write("[\n" + ",\n".join("  " + json.dumps(r, ensure_ascii=False) for r in out) + "\n]\n")
+        print(f"wrote pipelines.json: {len(by)} pipelines")
 
     print(f"ParseBench {pb_sha[:7]} vs dataset {ds_sha[:7]}")
     print(f"  added:   {rep['added'] or '-'}")
     print(f"  removed: {rep['removed'] or '-'}")
     print(f"  outputs changed: {sorted(rep['results_changed']) or '-'}")
-    print(f"  leaderboard changed: {sorted(rep['leaderboard_changed']) or '-'}")
+    lc = sorted(rep["leaderboard_changed"])
+    print(f"  leaderboard changed: {(lc if len(lc) <= 10 else f'{len(lc)} pipelines') or '-'}")
     for s in rep["notes"]:
         print("  note:", s)
     for s in rep["stop_reasons"]:
         print("  STOP:", s)
+    if rep["verdict"] == "FULL_RERUN":
+        for s in rescore:
+            print("  FULL_RERUN:", s)
+    print("  results pin:", rep["results_pin"])
     print("VERDICT", rep["verdict"], f"(details in {a.report})")
     sys.exit(0)
 

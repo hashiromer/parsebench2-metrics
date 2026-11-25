@@ -95,7 +95,8 @@ def main():
     # outputs unchanged: what depends on them only is kept as published (and checked against them)
     same_outputs = {p for p in replaced if base_pl.set_index("pipeline").at[p, "results_revision"] == new[p]["rev"]}
 
-    # provider names of added pipelines: results-v2.yaml maps pipeline -> provider; passed via PROVIDERS env as JSON
+    # provider names (results-v2.yaml maps pipeline -> provider), as JSON in the PROVIDERS env: required for added
+    # pipelines; for replaced ones it wins over the base's name, so a rename upstream is taken in a full re-run
     providers = json.loads(os.environ.get("PROVIDERS") or "{}")
 
     # ---- scores ---------------------------------------------------------------------------------------
@@ -131,7 +132,7 @@ def main():
                                "bbox_frame": None if pd.isna(r["bbox_frame"]) else r["bbox_frame"]}
     for p, n in new.items():
         boxes = [rec["output"].get("layout_pages") for (s, _), rec in n["raw"].items() if s == "layout"]
-        meta[p] = {"provider": meta[p]["provider"] if p in replaced else providers[p], "results_revision": n["rev"],
+        meta[p] = {"provider": providers.get(p) or meta[p]["provider"], "results_revision": n["rev"],
                    "metrics_file_sha256": sha256_file(n["deliv"]), "bbox_frame": A.bbox_frame(boxes),
                    "next_score": n["next_score"]}
     all_p = list(meta)
