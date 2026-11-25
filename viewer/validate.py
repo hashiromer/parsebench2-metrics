@@ -118,16 +118,33 @@ res["2_3_rows_keys"] = {"pass": bool(s.duplicated(["pipeline", "test_id"]).sum()
                         "page_key_rule": bool((s.page_key == s.test_id.map(lambda t: hashlib.sha256(t.encode()).hexdigest()[:16])).all())}
 
 # 4: markdown hash in scores == sha256 of the markdown in the outputs bundle (new pipelines)
+# Rows are grouped by page, so each page's bundles are read once for all the pipelines checked on it.
 mism = []; nchk = 0
 sn = s[s.pipeline.isin(NEW)]
-for r in sn.itertuples():
-    ob = json.load(open(f"{OUT}/bundles/outputs/{r.subset}/{r.page_key}.json"))["parsers"][r.pipeline]
-    mb = json.load(open(f"{OUT}/bundles/metrics/{r.subset}/{r.page_key}.json"))["parsers"][r.pipeline]
-    md = ob["markdown"]
-    h = hashlib.sha256(md.encode("utf-8")).hexdigest() if md is not None else None
-    nchk += 1
-    if h != r.markdown_sha256 or mb["markdown_sha256"] != r.markdown_sha256:
-        mism.append(r.test_id)
+
+
+def by_page(df):
+    for (subset, pk), g in df.groupby(["subset", "page_key"], sort=False):
+        yield (json.load(open(P(f"bundles/outputs/{subset}/{pk}.json")))["parsers"],
+               json.load(open(P(f"bundles/metrics/{subset}/{pk}.json")))["parsers"], g)
+
+
+vbad = 0; vn = 0  # check 6's metric values, compared here while each page's bundle is open
+for obs, mbs, g in by_page(sn):
+    for r in g.itertuples():
+        ob, mb = obs[r.pipeline], mbs[r.pipeline]
+        for mm in mb["metrics"]:
+            if mm["metric_name"] in s.columns:
+                vn += 1
+                v = getattr(r, mm["metric_name"])
+                if not ((v is None or (isinstance(v, float) and math.isnan(v))) and mm["value"] is None) and v != mm["value"]:
+                    vbad += 1
+        md = ob["markdown"]
+        h = hashlib.sha256(md.encode("utf-8")).hexdigest() if md is not None else None
+        nchk += 1
+        rh = None if pd.isna(r.markdown_sha256) else r.markdown_sha256  # no output: null in the row (NaN) and the bundles
+        if h != rh or mb["markdown_sha256"] != rh:
+            mism.append(r.test_id)
 res["4_join_exact_new"] = {"pass": not mism, "rows_checked": nchk, "mismatches": mism[:20],
                            "null_hash_rows_new": int(sn.markdown_sha256.isna().sum())}
 
@@ -142,15 +159,6 @@ for mname in ["text_next", "formatting_v2", "table_next", "chart_next", "forms_v
     exp = exp[exp > 0]
     if not (e.reindex(exp.index).fillna(0).astype(int) == exp.astype(int)).all() or int(exp.sum()) != int(e.sum()):
         evbad.append(mname)
-vbad = 0; vn = 0
-for r in sn.itertuples():
-    mb = json.load(open(f"{OUT}/bundles/metrics/{r.subset}/{r.page_key}.json"))["parsers"][r.pipeline]
-    for mm in mb["metrics"]:
-        if mm["metric_name"] in s.columns:
-            vn += 1
-            v = getattr(r, mm["metric_name"])
-            if not ((v is None or (isinstance(v, float) and math.isnan(v))) and mm["value"] is None) and v != mm["value"]:
-                vbad += 1
 res["6_events_complete_new"] = {"pass": not evbad and vbad == 0, "event_rows_new": ev_counts, "event_mismatches": evbad,
                                 "metric_values_compared": vn, "metric_value_mismatches": vbad}
 

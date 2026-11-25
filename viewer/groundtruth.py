@@ -42,9 +42,21 @@ def load_gt(gt_dir: str) -> dict[str, dict]:
     return out
 
 
+def as_obj(x):
+    """metadata / test_rules as objects. ParseBench-2 stores them as JSON strings, except some records corrected
+    in v2.08 (2e95407), which hold the objects themselves."""
+    return json.loads(x) if isinstance(x, str) else x
+
+
+def as_text(x) -> str:
+    """test_rules as the JSON string the bundles have always held (the encoding of every string record)."""
+    return x if isinstance(x, str) else json.dumps(x, ensure_ascii=False)
+
+
 def bundle(r: dict, revision: str) -> dict:
     b = dict(r)
-    b["metadata"] = json.loads(r["metadata"])
+    b["metadata"] = as_obj(r["metadata"])
+    b["test_rules"] = as_text(r["test_rules"])
     b["page_key"] = page_key(r["id"])
     b["document_url"] = document_url(revision, r["document"])
     return b
@@ -53,9 +65,9 @@ def bundle(r: dict, revision: str) -> dict:
 def table(gt: dict[str, dict]) -> pd.DataFrame:
     rows = [{"test_id": t, "page_key": page_key(t), "subset": r["subset"], "dimension": r["dimension"],
              "tags": list(r["tags"]), "expected_markdown": r["expected_markdown"],
-             "metadata_json": I.dumps(json.loads(r["metadata"])),
-             "test_rules_json": I.dumps(json.loads(r["test_rules"])),
-             "n_rules": len(json.loads(r["test_rules"]))} for t, r in gt.items()]
+             "metadata_json": I.dumps(as_obj(r["metadata"])),
+             "test_rules_json": I.dumps(as_obj(r["test_rules"])),
+             "n_rules": len(as_obj(r["test_rules"]))} for t, r in gt.items()]
     return pd.DataFrame(rows).sort_values("test_id", kind="stable").reset_index(drop=True)
 
 

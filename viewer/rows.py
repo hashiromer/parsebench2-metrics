@@ -100,9 +100,10 @@ def score_rows(pipeline: str, lines: list[dict], raw: dict, columns: list[str]) 
             row["started_at"] = _ts(rec.get("started_at"))
             row["completed_at"] = _ts(rec.get("completed_at"))
             ro = rec.get("raw_output") or {}
-            for col, key in RAW_NUMERIC.items():
-                if col in row and ro.get(key) is not None:
-                    row[col] = ro[key]
+            for col, key in RAW_NUMERIC.items():  # in raw_output, or at the record's top level (processing_duration_ms)
+                v = ro.get(key) if ro.get(key) is not None else rec.get(key)
+                if col in row and v is not None:
+                    row[col] = v
         rows.append(row)
     return pd.DataFrame(rows, columns=columns)
 

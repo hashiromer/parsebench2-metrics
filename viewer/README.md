@@ -178,8 +178,11 @@ Every pipeline's scores change; their outputs don't. Get the owner's go-ahead fi
    (`gh workflow run metrics.yml -f scorer_commit=… -f data_revision=…`, `pipelines.json` listing them all), then
    `gh run download <run id> -D work/deliver`. Re-score the control locally too and compare its `next_score.json`.
    Every pipeline's six dimensions must match `leaderboard-v2.csv` to its rounding.
-5. **Build**: `groundtruth.py` at the new revision into `work/out`, then `build.py --replace` for every pipeline
-   (`--scorer-revision`, `--groundtruth-revision` update `site.json`), into the same `work/out`.
+5. **Build**: `groundtruth.py` at the new revision, then `build.py --replace` for every pipeline
+   (`--scorer-revision`, `--groundtruth-revision` update `site.json`). One pipeline needs about 300 MB, so on a
+   22 GB machine replace them in passes of 10: each pass's `--base` is the previous tree with that pass's `--out`
+   hard-linked over it (`cp -al`). Before finalize, unlink `viewer_manifest.json`, `validation_report.json` and
+   `README.md` in the final tree: they are hard links into the base, and finalize writes them in place.
 6. **Validate** with every pipeline listed, then steps 7–9 of the update as usual. Almost every file changes.
 
 ## When the verdict is NEEDS_REVIEW
@@ -241,3 +244,10 @@ These rules were reverse-engineered from the published data; the verify scripts 
   (`score_local.sh`, register patch at `03fbc17`); control exact. Base assembled by `fetch_base.py` from the previous
   update's files (no downloads). Dataset `14a653c` on branch `update-61-parsers` (single commit, 4.5 min, no 504),
   `main` synced at `b6b3c67`. Results `497e243`, leaderboard `d6209da`. All checks passed; 9,251 files changed.
+- **2026-11-24/25**, full re-score of all 61 parsers: scorer `d6209da`, ground truth `2e95407` (v2.08), leaderboard
+  `d0c77ef` (upstream's re-score, before Hy4 Flash was added; Hy4 is held back while its results are on an open PR).
+  Patches rebased (registration patch emptied). Scored on GitHub Actions in 34 min (run 45504854002); the control
+  matched a local re-score on every page. Built in 7 passes. Fixes found on the way: `processing_duration_ms` is at
+  a record's top level for some pipelines (rows.py now reads it there); validate's join check treated the 45
+  no-output rows as mismatches. Dataset `aceefd8` on branch `rescore-2026-11-24` (504, landed, 8 min); 13,569 files
+  changed; every file on the branch verified by hash.
