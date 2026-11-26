@@ -1,0 +1,45 @@
+{
+ "results_revision": "497e243f68cd861c80b5a1405e20758992d4a8de",
+ "leaderboard_revision": "d0c77efbce6c274d422e429a0c495dc0712d86cb",
+ "scorer_revision": "d6209dab930702c63f6dcf23eca02501a948d76b",
+ "groundtruth_revision": "2e95407575ba1ad6aa90842258482a561fae1b33",
+ "old_count": 61,
+ "metrics_build_note": "Every pipeline was re-scored on 2026-11-24 with scorer d6209da and ground truth 2e95407 (full_events.patch only; register_pipelines.patch is empty since upstream registers those pipelines) by the Build metrics workflow of hashiromer/parsebench2-metrics at 1e292bf, run 45504854002.",
+ "control": {
+  "pipeline": "qwen3_5_4b_vllm_layout",
+  "result": "re-scored with the same scorer and ground truth on GitHub Actions and on a second machine: all 4,317 pages identical"
+ },
+ "replace_proof": "build.py --replace of the control with its published deliverable reproduced the previous dataset (b6b3c67): 9,245 of 9,248 files byte-identical, the rest differing only in metrics_file_sha256 and 4 slot scores in the last binary digit (check_replace.py)",
+ "deviation_replace": {
+  "Slot scores of pipelines added after the": "Slot scores are correctly rounded means (math.fsum / n); every pipeline's were recomputed in the 2026-11-24 re-score. Dimension and overall scores are the scorer's own next_score."
+ },
+ "deviations_add": [
+  "Ground truth v2.08 stores metadata and test_rules of 11 corrected text pages as JSON objects rather than strings; the ground-truth bundles keep test_rules as a string for every page, encoded like the others (json.dumps, ensure_ascii=False)."
+ ],
+ "readme_replace": [
+  [
+   "No parser was re-run and no score was changed; the data is only reshaped and joined. The per-page metrics come from\nParseBench's own scorer at the pinned commit; the parsers added later (Gemini 4 neon low, GPT-6.2 sol low and medium on\n2026-11-20, LiteParse + OCRia-nano-1 on 2026-11-23, OCRia-1 on 2026-11-24) were scored the same way with\n[hashiromer/parsebench2-metrics](https://github.com/hashiromer/parsebench2-metrics). It adds only ParseBench's\nown registration of those pipelines (from later commits; the layout evaluator picks its adapter from the pipeline\nregistry), and it re-scored one earlier parser as a control, reproducing every page exactly.",
+   "No parser was re-run and no score was changed; the data is only reshaped and joined. The per-page metrics come from\nParseBench's own scorer at the pinned commit, run on every parser's published outputs by\n[hashiromer/parsebench2-metrics](https://github.com/hashiromer/parsebench2-metrics) on 2026-11-24, when the leaderboard\nwas re-scored upstream. Its only change to the scorer keeps every scoring event instead of the first few, which leaves\nthe scores unchanged. One parser was also re-scored on a second machine as a control, matching every page exactly."
+  ],
+  [
+   "ParseBench/blob/d6209dab930702c63f6dcf23eca02501a948d76b/leaderboard-v2.csv) | `d6209dab930702c63f6dcf23eca02501a948d76b` |",
+   "ParseBench/blob/d0c77efbce6c274d422e429a0c495dc0712d86cb/leaderboard-v2.csv) | `d0c77efbce6c274d422e429a0c495dc0712d86cb` |"
+  ],
+  [
+   "d7efdbc864e2e55f9793063a90936123fc769004",
+   "d6209dab930702c63f6dcf23eca02501a948d76b"
+  ],
+  [
+   "2d9a2344660647e87dc272458ea1978428f895eb",
+   "2e95407575ba1ad6aa90842258482a561fae1b33"
+  ],
+  [
+   "Later ParseBench scorer releases (2.1.2, 2.1.3) and ground-truth corrections (v2.06, v2.07) are not applied, here or\non that leaderboard. A pending upstream re-score ([run-llama/ParseBench#315](https://github.com/run-llama/ParseBench/pull/315),\nopen on 2026-11-23) would move the ground truth to `51c6bc2` and the scorer to `e6a7dcc`; it is not applied either.",
+   "This follows upstream's re-score ([run-llama/ParseBench#315](https://github.com/run-llama/ParseBench/pull/315)): ground\ntruth v2.08 (`2e95407`) and scorer `d6209da`. Later scorer releases (2.2.2) are not applied, here or on that\nleaderboard. Tencent Hy4 Flash, added to the leaderboard after the re-score, is not included yet: its results are on\nan unmerged pull request of the results repo."
+  ],
+  [
+   "ones, so for 9 parsers it differs from the published Overall by 0.005–0.007 points",
+   "ones, so for {overall_off_count} parsers it differs from the published Overall by {overall_off_range} points"
+  ]
+ ]
+}

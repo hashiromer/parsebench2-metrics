@@ -31,6 +31,58 @@ These come from the dataset's owner and hold for every update:
   commit. Where upstream has since added or fixed something a patch did, upstream's version wins and our hunk is
   dropped (an emptied patch is skipped); ours stays only for what upstream lacks (uncapped events).
 
+## Before you start: a fresh machine or session
+
+Everything an update needs is in this repo and the explorer's; nothing lives only in an earlier chat. A new session
+needs both repos, the tools below and the owner's logins.
+
+**Tokens never go into a repo.** No token, key or password is written into either repo, a script, a commit message,
+a config file, a command line or a chat. Each tool keeps its own login in the owner's home directory (`hf` in
+`~/.cache/huggingface/`, `gh` in `~/.config/gh/`, `cf` in its own profile), and the scripts use that login
+(`HfApi()` with no token argument). Before using a tool, check whether it is signed in. If it isn't, stop, tell the
+owner which command to run, and let them run it themselves in their own terminal. An agent never asks for a token,
+pastes one or types one in. The scoring workflow uses no secrets: everything it reads is public.
+
+| Access | Needed for | Check | If not signed in, the owner runs |
+| --- | --- | --- | --- |
+| Hugging Face, write access to `Hashir621/parsebench2-viewer` | the upload only ("Finish", step 2); every read is public | `hf auth whoami` | `hf auth login` (a token with write access to that repo) |
+| GitHub as `hashiromer` | `gh workflow run` / `gh run download` (artifacts need a login, even on a public repo), pushing both repos, cloning the explorer (private) | `gh auth status` | `gh auth login` |
+| Cloudflare (optional) | only reading the explorer's build logs; a push to `main` deploys by itself | `env -u CLOUDFLARE_API_TOKEN cf auth whoami` | `cf auth login` |
+
+On the maintainer's VM, `CLOUDFLARE_API_TOKEN` in the environment is an old token that was deleted. Run `cf` as
+`env -u CLOUDFLARE_API_TOKEN cf …` so it uses the login.
+
+Tools (install what is missing; none needs a token):
+
+| Tool | For | Install |
+| --- | --- | --- |
+| `git`, `python3` | everything | system packages |
+| [`uv`](https://docs.astral.sh/uv/) | every Python script (`uv run --with …` brings its own packages) | `curl -LsSf https://astral.sh/uv/install.sh \| sh` |
+| `hf` | Hugging Face login | `uv tool install huggingface_hub` |
+| `gh` | GitHub | [cli.github.com](https://cli.github.com/) |
+| Node 22+ with `pnpm` | the explorer (`pnpm install`, `pnpm run build:vinext`, `node scripts/check-licenses.mjs`) | [nvm](https://github.com/nvm-sh/nvm), then `npm i -g pnpm` |
+| Playwright Chromium | the page check | `cd viewer/site_check && npm i --no-save playwright && npx playwright install chromium` |
+| `cf` (optional) | Cloudflare build logs | `npm i -g cf` |
+
+Folder layout (the commands in this file assume it; `work/` is outside both repos and never committed):
+
+```
+<any folder>/
+  parsebench2-metrics/    git clone https://github.com/hashiromer/parsebench2-metrics
+  parsebench2-explorer/   gh repo clone hashiromer/parsebench2-explorer
+  scorer/                 git clone https://github.com/run-llama/ParseBench   (only to rebase the patches, F1)
+  work/                   changes.json and each update's work dirs: <any folder>/work, not viewer/work
+  work/seed/              optional: the dataset tree of the last update, for fetch_base.py to hard-link from
+```
+
+`work/seed` exists only on the maintainer's VM (about 10 GB). Without it, `fetch_base.py` and `fetch_outputs.py`
+download what they need: slower, same result. Keep `work/` on the main disk, not `/tmp`. A full re-run's build peaks
+at about 6 GB of memory (passes of 10 pipelines), and the 2026-11-24/25 runs left about 54 GB of work data: keep at
+least that much disk free.
+
+Each update's `finalize.py` settings are kept in git: [`finalize_cfg.example.json`](finalize_cfg.example.json) is
+the 2026-11-24 full re-run's. Copy it, then update every field (see "Finish", step 1).
+
 ## Two paths
 
 Every update takes one of two paths, picked by `detect_changes.py` (step 1). There is deliberately no third,
@@ -171,10 +223,14 @@ Then "Finish" below, with `work/<update>/stage0` as the base and the validated t
 
 ### 1. Manifest, validation report, README
 
-Write a `finalize_cfg.json` (copy the last update's, see "History", and update every field) and run:
+Write a `work/<update>/finalize_cfg.json`: copy [`finalize_cfg.example.json`](finalize_cfg.example.json) (the
+2026-11-24 full re-run's) and update every field: the four revisions, `old_count` (parsers before this update),
+`metrics_build_note`, `control`, `replace_proof`, `deviation_replace` / `deviations_add` (changes to the manifest's
+"deviations_from_build_spec"), and `readme_replace`, `[old, new]` pairs of the dataset README's text (each old text
+must be in the current README; take it from the live dataset, not from the example). Then run:
 
 ```bash
-python finalize.py <base> <out> <build_state.json> <checks.json> work/finalize_cfg.json
+python finalize.py <base> <out> <build_state.json> <checks.json> work/<update>/finalize_cfg.json
 ```
 
 In `readme_replace`, write `{overall_off_count}` and `{overall_off_range}` where the README says for how many parsers
@@ -304,6 +360,7 @@ These rules were reverse-engineered from the published data; the verify scripts 
 | `full_rerun.sh` | F3: the whole full re-run from deliverables to a validated tree |
 | `check_replace.py` | proof that `--replace` with a pipeline's own deliverable reproduces the base |
 | `validate.py`, `finalize.py` | checks; manifest, validation report and README |
+| `finalize_cfg.example.json` | the last full re-run's `finalize.py` settings, to copy |
 | `changeset.py`, `upload.py`, `verify_upload.py`, `sync_main.py` | upload and its checks |
 | `site_check/` | headless page check of the explorer, local build and production |
 
